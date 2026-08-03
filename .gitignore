@@ -1,0 +1,11 @@
+__pycache__/
+.venv/
+build/
+dist/
+*.spec
+runtime-check.png
+packaged-check.png
+red-check.png
+popup-*.png
+*-check.png
+*-crop.png
