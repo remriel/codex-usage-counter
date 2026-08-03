@@ -23,6 +23,16 @@ A small Windows desktop counter that keeps your current Codex usage visible with
 
 The executable is self-contained and does not require Python to be installed.
 
+## Screenshots
+
+### Counter window
+
+![Codex Usage Counter window](screenshots/counter.png)
+
+### Statistics view
+
+![Codex Usage Counter statistics view](screenshots/statistics.png)
+
 ## How the data is read
 
 The counter reads the latest `rate_limits` event from JSONL files under:
