@@ -1259,7 +1259,9 @@ class UsageApp:
             return
         if bucket > self.last_alert_bucket:
             self.last_alert_bucket = bucket
-            self.tray_popup.show(f"Usage reached {result.used_percent:.0f}%")
+            display_percent = self._display_percent(result)
+            if display_percent is not None:
+                self.tray_popup.show(f"{display_percent:.0f}% {self._display_label()}")
             if self.settings.sound_alert:
                 self._play_sound_alert()
 
