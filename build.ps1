@@ -16,6 +16,7 @@ if ($LASTEXITCODE -ne 0) {
 Push-Location $projectRoot
 try {
     & (Join-Path $projectRoot 'build-taskbar-icons.ps1')
+    & (Join-Path $projectRoot 'build-milestone-sound.ps1')
     & $python.Source -m PyInstaller --noconfirm --clean --onefile --windowed `
         --name CodexUsageCounter `
         --icon $icon `

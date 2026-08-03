@@ -5,16 +5,24 @@ import ctypes.wintypes as wintypes
 import json
 import os
 import queue
+import subprocess
 import sys
 import threading
 import time
 import webbrowser
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from collections import deque
 from pathlib import Path
 from typing import Any, Optional
 
 import tkinter as tk
+from tkinter import messagebox
+
+try:
+    import winsound
+except ImportError:
+    winsound = None
 
 
 USAGE_DASHBOARD_URL = "https://chatgpt.com/codex/settings/usage"
@@ -24,6 +32,7 @@ CONFIG_FILE = CONFIG_DIR / "settings.json"
 HISTORY_FILE = CONFIG_DIR / "usage_history.json"
 HISTORY_RETENTION_DAYS = 30
 HISTORY_MAX_POINTS = 60000
+STARTUP_SHORTCUT_NAME = "Codex Usage Counter.lnk"
 
 COLORS = {
     "ink": "#0d1224",
@@ -49,6 +58,12 @@ def asset_path(name: str) -> Path:
     else:
         candidate = Path(__file__).resolve().parent / "assets" / name
     return candidate
+
+
+def startup_shortcut_path() -> Path:
+    appdata = os.environ.get("APPDATA")
+    base = Path(appdata) if appdata else Path.home()
+    return base / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / STARTUP_SHORTCUT_NAME
 
 
 _instance_mutex: Optional[int] = None
@@ -140,6 +155,8 @@ def format_updated(timestamp: Optional[float]) -> str:
 class AppSettings:
     display_mode: str = "used"
     always_on_top: bool = True
+    start_with_windows: bool = False
+    sound_alert: bool = False
     milestone_size: int = 128
     milestone_step: int = 10
     milestone_duration: int = 5
@@ -169,6 +186,8 @@ class AppSettings:
         return cls(
             display_mode=display_mode,
             always_on_top=bool(payload.get("always_on_top", True)),
+            start_with_windows=bool(payload.get("start_with_windows", startup_shortcut_path().exists())),
+            sound_alert=bool(payload.get("sound_alert", False)),
             milestone_size=milestone_size,
             milestone_step=milestone_step,
             milestone_duration=milestone_duration,
@@ -183,6 +202,8 @@ class AppSettings:
                     {
                         "display_mode": self.display_mode,
                         "always_on_top": self.always_on_top,
+                        "start_with_windows": self.start_with_windows,
+                        "sound_alert": self.sound_alert,
                         "milestone_size": self.milestone_size,
                         "milestone_step": self.milestone_step,
                         "milestone_duration": self.milestone_duration,
@@ -227,6 +248,8 @@ class UsageHistory:
         now = time.time()
         point = {"timestamp": now, "used_percent": float(snapshot.used_percent)}
         if self.points and int(self.points[-1]["timestamp"] // 60) == int(now // 60):
+            if self.points[-1]["used_percent"] == point["used_percent"]:
+                return
             self.points[-1] = point
         else:
             self.points.append(point)
@@ -272,25 +295,56 @@ class UsageHistory:
             return None
         return sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / denominator
 
-    def rate_series(self, hours: int) -> list[dict[str, float]]:
+    def rate_series(
+        self,
+        hours: int,
+        points: Optional[list[dict[str, float]]] = None,
+    ) -> list[dict[str, float]]:
         """Return hourly trend rates using a reset-aware regression plus EMA."""
 
-        points = self.chart_points(hours)
+        points = points if points is not None else self.chart_points(hours)
         series: list[dict[str, float]] = []
         smoothed: Optional[float] = None
-        for index, point in enumerate(points):
+        if not points:
+            return series
+
+        origin = points[0]["timestamp"]
+        window: deque[tuple[dict[str, float], float, float]] = deque()
+        sum_x = 0.0
+        sum_y = 0.0
+        sum_x_squared = 0.0
+        sum_xy = 0.0
+
+        for point in points:
             cutoff = point["timestamp"] - 3 * 3600
-            window = [candidate for candidate in points[: index + 1] if candidate["timestamp"] >= cutoff]
-            reset_index: Optional[int] = None
-            for item_index in range(1, len(window)):
-                if window[item_index]["used_percent"] < window[item_index - 1]["used_percent"] - 5:
-                    reset_index = item_index
-            if reset_index is not None:
-                window = window[reset_index:]
+            while window and window[0][0]["timestamp"] < cutoff:
+                _, old_x, old_y = window.popleft()
+                sum_x -= old_x
+                sum_y -= old_y
+                sum_x_squared -= old_x * old_x
+                sum_xy -= old_x * old_y
+
+            if window and point["used_percent"] < window[-1][0]["used_percent"] - 5:
+                window.clear()
+                sum_x = 0.0
+                sum_y = 0.0
+                sum_x_squared = 0.0
+                sum_xy = 0.0
                 smoothed = None
-            raw_rate = self._slope(window)
-            if raw_rate is None:
+
+            x = (point["timestamp"] - origin) / 3600
+            y = point["used_percent"]
+            window.append((point, x, y))
+            sum_x += x
+            sum_y += y
+            sum_x_squared += x * x
+            sum_xy += x * y
+
+            count = len(window)
+            denominator = count * sum_x_squared - sum_x * sum_x
+            if count < 2 or denominator <= 0:
                 continue
+            raw_rate = (count * sum_xy - sum_x * sum_y) / denominator
             smoothed = raw_rate if smoothed is None else smoothed * 0.65 + raw_rate * 0.35
             series.append(
                 {
@@ -332,6 +386,7 @@ class CodexTelemetryReader:
         configured_home = os.environ.get("CODEX_HOME")
         self.codex_home = Path(configured_home).expanduser() if configured_home else Path.home() / ".codex"
         self.sessions_dir = self.codex_home / "sessions"
+        self._file_cache: dict[str, tuple[int, int, Optional[UsageSnapshot]]] = {}
 
     @staticmethod
     def _tail_lines(path: Path, max_bytes: int = 384 * 1024) -> list[str]:
@@ -371,41 +426,62 @@ class CodexTelemetryReader:
         files.sort(key=lambda item: item.stat().st_mtime, reverse=True)
         return files[:48]
 
+    def _read_file(self, path: Path, file_mtime: float) -> Optional[UsageSnapshot]:
+        latest: Optional[UsageSnapshot] = None
+        for line in self._tail_lines(path):
+            if '"rate_limits"' not in line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            limits = self._rate_limits(event)
+            if not limits:
+                continue
+            primary = limits.get("primary")
+            secondary = limits.get("secondary")
+            selected = primary if isinstance(primary, dict) else secondary
+            if not isinstance(selected, dict):
+                continue
+            used = number(selected.get("used_percent"))
+            if used is None:
+                continue
+            timestamp = parse_timestamp(event.get("timestamp")) or file_mtime
+            snapshot = UsageSnapshot(
+                used_percent=clamp(used, 0, 100),
+                window_minutes=int(number(selected.get("window_minutes")) or 0) or None,
+                resets_at=number(selected.get("resets_at")),
+                plan_type=str(limits.get("plan_type") or "").strip() or None,
+                timestamp=timestamp,
+                source_path=str(path),
+            )
+            if latest is None or timestamp > (latest.timestamp or 0):
+                latest = snapshot
+        return latest
+
     def read(self) -> UsageSnapshot:
         if not self.sessions_dir.exists():
             return UsageSnapshot(error="Codex session telemetry is not available yet")
 
         latest: Optional[tuple[float, UsageSnapshot]] = None
+        next_cache: dict[str, tuple[int, int, Optional[UsageSnapshot]]] = {}
         for path in self._candidate_files():
-            for line in self._tail_lines(path):
-                if '"rate_limits"' not in line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                limits = self._rate_limits(event)
-                if not limits:
-                    continue
-                primary = limits.get("primary")
-                secondary = limits.get("secondary")
-                selected = primary if isinstance(primary, dict) else secondary
-                if not isinstance(selected, dict):
-                    continue
-                used = number(selected.get("used_percent"))
-                if used is None:
-                    continue
-                timestamp = parse_timestamp(event.get("timestamp")) or path.stat().st_mtime
-                snapshot = UsageSnapshot(
-                    used_percent=clamp(used, 0, 100),
-                    window_minutes=int(number(selected.get("window_minutes")) or 0) or None,
-                    resets_at=number(selected.get("resets_at")),
-                    plan_type=str(limits.get("plan_type") or "").strip() or None,
-                    timestamp=timestamp,
-                    source_path=str(path),
-                )
-                if latest is None or timestamp > latest[0]:
-                    latest = (timestamp, snapshot)
+            try:
+                metadata = path.stat()
+            except OSError:
+                continue
+            cache_key = str(path)
+            signature = (metadata.st_mtime_ns, metadata.st_size)
+            cached = self._file_cache.get(cache_key)
+            if cached is not None and cached[:2] == signature:
+                snapshot = cached[2]
+            else:
+                snapshot = self._read_file(path, metadata.st_mtime)
+            next_cache[cache_key] = (signature[0], signature[1], snapshot)
+            if snapshot is not None and snapshot.timestamp is not None:
+                if latest is None or snapshot.timestamp > latest[0]:
+                    latest = (snapshot.timestamp, snapshot)
+        self._file_cache = next_cache
 
         if latest:
             return latest[1]
@@ -811,6 +887,7 @@ class UsageApp:
         self.refresh_after_id: Optional[str] = None
         self.icon_image: Optional[tk.PhotoImage] = None
         self.tray_icon_percent: Optional[int] = None
+        self.last_tray_tooltip: Optional[str] = None
         self.milestone_popup = MilestonePopup(self.root, self.settings)
         self.settings_window: Optional[tk.Toplevel] = None
         self.stats_window: Optional[tk.Toplevel] = None
@@ -867,7 +944,7 @@ class UsageApp:
         self.root.after(100, self._poll_tray)
         self.root.after(200, self.refresh_async)
         self.refresh_after_id = self.root.after(self.settings.refresh_interval_seconds * 1000, self._poll_refresh)
-        self.root.after(5000, self._refresh_countdown)
+        self.root.after(30000, self._refresh_countdown)
 
     def _initial_geometry(self) -> str:
         try:
@@ -913,6 +990,87 @@ class UsageApp:
 
     def _display_label(self) -> str:
         return "remaining" if self.settings.display_mode == "remaining" else "used"
+
+    def _set_start_with_windows(self, enabled: bool) -> bool:
+        if os.name != "nt":
+            return not enabled
+
+        shortcut_path = startup_shortcut_path()
+        if not enabled:
+            try:
+                if shortcut_path.exists():
+                    shortcut_path.unlink()
+                return True
+            except OSError:
+                return False
+
+        if getattr(sys, "_MEIPASS", None):
+            target_path = Path(sys.executable).resolve()
+            arguments = ""
+            working_directory = target_path.parent
+            icon_path = target_path
+        else:
+            source_path = Path(__file__).resolve()
+            target_path = Path(sys.executable).resolve()
+            pythonw_path = target_path.with_name("pythonw.exe")
+            if pythonw_path.exists():
+                target_path = pythonw_path
+            arguments = f'"{source_path}"'
+            working_directory = source_path.parent
+            icon_path = asset_path("usage-orbit.ico")
+
+        def powershell_string(value: str) -> str:
+            return "'" + value.replace("'", "''") + "'"
+
+        command = "\n".join(
+            (
+                "$ErrorActionPreference = 'Stop'",
+                f"$shortcutPath = {powershell_string(str(shortcut_path))}",
+                f"$targetPath = {powershell_string(str(target_path))}",
+                f"$workingDirectory = {powershell_string(str(working_directory))}",
+                f"$arguments = {powershell_string(arguments)}",
+                f"$iconPath = {powershell_string(str(icon_path))}",
+                "New-Item -ItemType Directory -Path (Split-Path -Parent $shortcutPath) -Force | Out-Null",
+                "$shell = New-Object -ComObject WScript.Shell",
+                "$shortcut = $shell.CreateShortcut($shortcutPath)",
+                "$shortcut.TargetPath = $targetPath",
+                "$shortcut.WorkingDirectory = $workingDirectory",
+                "$shortcut.Arguments = $arguments",
+                "$shortcut.Description = 'Always-on-top Codex usage counter'",
+                "$shortcut.IconLocation = \"$iconPath,0\"",
+                "$shortcut.Save()",
+            )
+        )
+        startup_info = subprocess.STARTUPINFO()
+        startup_info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup_info.wShowWindow = subprocess.SW_HIDE
+        try:
+            result = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                startupinfo=startup_info,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+                check=False,
+            )
+        except OSError:
+            return False
+        return result.returncode == 0
+
+    def _play_sound_alert(self) -> None:
+        if winsound is None:
+            return
+        sound_path = asset_path("milestone-alert.wav")
+        try:
+            if sound_path.exists():
+                winsound.PlaySound(
+                    str(sound_path),
+                    winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT,
+                )
+            else:
+                winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        except (RuntimeError, OSError):
+            return
 
     def _set_tray_icon(self, percent: Optional[int]) -> None:
         if percent == self.tray_icon_percent:
@@ -1015,12 +1173,14 @@ class UsageApp:
             taskbar_label = "Codex Usage Counter"
             tray_tip = "Codex Usage Counter • open Codex to connect"
         self.root.title(taskbar_label)
-        self.tray.update_tooltip(tray_tip)
+        if tray_tip != self.last_tray_tooltip:
+            self.tray.update_tooltip(tray_tip)
+            self.last_tray_tooltip = tray_tip
 
     def _refresh_countdown(self) -> None:
         if self.root.winfo_exists():
             self._draw()
-            self.root.after(5000, self._refresh_countdown)
+            self.root.after(30000, self._refresh_countdown)
 
     def _poll_refresh(self) -> None:
         self.refresh_after_id = None
@@ -1075,6 +1235,8 @@ class UsageApp:
         if bucket > self.last_alert_bucket:
             self.last_alert_bucket = bucket
             self.milestone_popup.show()
+            if self.settings.sound_alert:
+                self._play_sound_alert()
 
     def _poll_tray(self) -> None:
         self.tray.poll_actions()
@@ -1367,8 +1529,8 @@ class UsageApp:
         canvas.delete("all")
 
         raw_points = self.history.since(self.stats_period_hours)
-        usage_points = self.history.chart_points(self.stats_period_hours)
-        rate_points = self.history.rate_series(self.stats_period_hours)
+        usage_points = raw_points
+        rate_points = self.history.rate_series(self.stats_period_hours, usage_points)
         current = raw_points[-1]["used_percent"] if raw_points else self.snapshot.used_percent
         remaining = 100 - current if current is not None else None
         current_rate = rate_points[-1]["rate_per_hour"] if rate_points else None
@@ -1494,7 +1656,24 @@ class UsageApp:
         dialog.configure(bg=COLORS["panel"])
         dialog.resizable(False, False)
         dialog.transient(self.root)
-        dialog.geometry(f"390x410+{self.root.winfo_x() + 35}+{self.root.winfo_y() + 40}")
+        dialog_width, dialog_height = 390, 480
+        self.root.update_idletasks()
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        root_x = self.root.winfo_x()
+        root_y = self.root.winfo_y()
+        root_height = self.root.winfo_height()
+        x = int(clamp(root_x + 35, 20, max(20, screen_width - dialog_width - 20)))
+        above_y = root_y - dialog_height - 12
+        below_y = root_y + root_height + 12
+        usable_bottom = screen_height - 48
+        if above_y >= 20:
+            y = above_y
+        elif below_y + dialog_height <= usable_bottom:
+            y = below_y
+        else:
+            y = max(20, usable_bottom - dialog_height)
+        dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
 
         body = tk.Frame(dialog, bg=COLORS["panel"], padx=18, pady=16)
         body.pack(fill="both", expand=True)
@@ -1539,6 +1718,34 @@ class UsageApp:
             highlightthickness=0,
             font=("Segoe UI", 10),
         ).pack(anchor="w", pady=(11, 0))
+
+        startup_var = tk.BooleanVar(value=self.settings.start_with_windows)
+        tk.Checkbutton(
+            body,
+            text="Start with Windows",
+            variable=startup_var,
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            activebackground=COLORS["panel"],
+            activeforeground=COLORS["text"],
+            selectcolor=COLORS["panel_raised"],
+            highlightthickness=0,
+            font=("Segoe UI", 10),
+        ).pack(anchor="w", pady=(5, 0))
+
+        sound_var = tk.BooleanVar(value=self.settings.sound_alert)
+        tk.Checkbutton(
+            body,
+            text="Play a sound at milestones",
+            variable=sound_var,
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            activebackground=COLORS["panel"],
+            activeforeground=COLORS["text"],
+            selectcolor=COLORS["panel_raised"],
+            highlightthickness=0,
+            font=("Segoe UI", 10),
+        ).pack(anchor="w", pady=(5, 0))
 
         popup_section = tk.Frame(body, bg=COLORS["panel"])
         popup_section.pack(fill="x", pady=(14, 0))
@@ -1626,8 +1833,18 @@ class UsageApp:
             self.settings_window = None
 
         def apply_dialog() -> None:
+            start_with_windows = bool(startup_var.get())
+            if not self._set_start_with_windows(start_with_windows):
+                messagebox.showerror(
+                    "Startup setting",
+                    "Windows could not update the Startup shortcut. Check your Windows permissions and try again.",
+                    parent=dialog,
+                )
+                return
             self.settings.display_mode = mode_var.get()
             self.settings.always_on_top = bool(topmost_var.get())
+            self.settings.start_with_windows = start_with_windows
+            self.settings.sound_alert = bool(sound_var.get())
             self.settings.milestone_size = int(size_var.get().split()[0])
             self.settings.milestone_step = int(step_var.get().rstrip("%"))
             self.settings.milestone_duration = int(duration_var.get().split()[0])

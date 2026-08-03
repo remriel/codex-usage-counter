@@ -10,7 +10,7 @@ A small Windows desktop counter that keeps your current Codex usage visible with
 - Displays the current number directly in the notification-area tray icon, so it is readable without hovering.
 - Shows a configurable app-icon-only milestone popup in the top-right corner.
 - Polls local usage every two minutes by default; **Refresh now** reads immediately outside that schedule.
-- Supports Used or Remaining display mode, always-on-top behavior, configurable polling, and configurable milestone size, trigger percentage, and duration.
+- Supports Used or Remaining display mode, always-on-top behavior, optional Start with Windows behavior, optional custom milestone chime, configurable polling, and configurable milestone size, trigger percentage, and duration.
 - Keeps minute-level usage history with 3-hour, 12-hour, 24-hour, 7-day, and 30-day overlapping usage/rate graphs.
 - Provides click-and-drag point inspection, smoothed rate trends, ETA, reset-aware regression, and time-series statistics.
 
@@ -18,7 +18,7 @@ A small Windows desktop counter that keeps your current Codex usage visible with
 
 1. Download `CodexUsageCounter.exe` from the [latest release](../../releases/latest).
 2. Run it. The app starts in the notification area and opens its counter window.
-3. Use **Settings** to choose Used or Remaining and adjust polling or milestone behavior.
+3. Use **Settings** to choose Used or Remaining, enable or disable Start with Windows, and adjust polling or milestone behavior.
 4. To start it with Windows, run `install-startup.ps1` from the downloaded package, or use the packaged app path when prompted.
 
 The executable is self-contained and does not require Python to be installed.
