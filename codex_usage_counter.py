@@ -534,6 +534,63 @@ if os.name == "nt":
     class _POINT(ctypes.Structure):
         _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
 
+    # ctypes defaults Win32 function results to a 32-bit c_long. Explicitly
+    # declare handle-returning APIs so 64-bit HWND/HICON values are not
+    # truncated before they are handed to the Windows shell.
+    _kernel32.CreateMutexW.restype = wintypes.HANDLE
+    _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    _kernel32.CloseHandle.restype = wintypes.BOOL
+    _kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+    _kernel32.GetModuleHandleW.restype = wintypes.HINSTANCE
+
+    _user32.CreateWindowExW.argtypes = [
+        wintypes.DWORD,
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.HWND,
+        wintypes.HMENU,
+        wintypes.HINSTANCE,
+        wintypes.LPVOID,
+    ]
+    _user32.CreateWindowExW.restype = wintypes.HWND
+    _user32.LoadImageW.argtypes = [
+        wintypes.HINSTANCE,
+        wintypes.LPCWSTR,
+        wintypes.UINT,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.UINT,
+    ]
+    _user32.LoadImageW.restype = wintypes.HICON
+    _user32.DestroyIcon.argtypes = [wintypes.HICON]
+    _user32.DestroyIcon.restype = wintypes.BOOL
+    _user32.DestroyWindow.argtypes = [wintypes.HWND]
+    _user32.DestroyWindow.restype = wintypes.BOOL
+    _user32.RegisterClassW.argtypes = [ctypes.POINTER(_WNDCLASSW)]
+    _user32.RegisterClassW.restype = wintypes.ATOM
+    _user32.UnregisterClassW.argtypes = [wintypes.LPCWSTR, wintypes.HINSTANCE]
+    _user32.UnregisterClassW.restype = wintypes.BOOL
+    _user32.GetCursorPos.argtypes = [ctypes.POINTER(_POINT)]
+    _user32.GetCursorPos.restype = wintypes.BOOL
+    _user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    _user32.PostMessageW.restype = wintypes.BOOL
+    _user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    _user32.DefWindowProcW.restype = _LRESULT
+    _user32.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT]
+    _user32.GetMessageW.restype = ctypes.c_int
+    _user32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
+    _user32.TranslateMessage.restype = wintypes.BOOL
+    _user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
+    _user32.DispatchMessageW.restype = _LRESULT
+    _user32.PostQuitMessage.argtypes = [ctypes.c_int]
+    _shell32.Shell_NotifyIconW.argtypes = [wintypes.DWORD, ctypes.POINTER(_NOTIFYICONDATAW)]
+    _shell32.Shell_NotifyIconW.restype = wintypes.BOOL
+
 
 class TrayIcon:
     """Small ctypes-only notification-area icon, so the app has no tray dependency."""
