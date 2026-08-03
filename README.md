@@ -8,9 +8,9 @@ A small Windows desktop counter that keeps your current Codex usage visible with
 
 - Shows the latest local Codex rate-limit percentage, usage window, plan, reset countdown, and signal state.
 - Displays the current number directly in the notification-area tray icon, so it is readable without hovering.
-- Shows a configurable app-icon-only milestone popup in the top-right corner.
+- Shows a custom in-app tray milestone popup above the Windows notification area; it does not use Windows toast or balloon notifications.
 - Polls local usage every two minutes by default; **Refresh now** reads immediately outside that schedule.
-- Supports Used or Remaining display mode, always-on-top behavior, optional Start with Windows behavior, optional custom milestone chime, configurable polling, and configurable milestone size, trigger percentage, and duration.
+- Supports Used or Remaining display mode, always-on-top behavior, optional Start with Windows behavior, optional custom milestone chime, configurable polling, trigger percentage, and popup duration.
 - Keeps minute-level usage history with 3-hour, 12-hour, 24-hour, 7-day, and 30-day overlapping usage/rate graphs.
 - Provides click-and-drag point inspection, smoothed rate trends, ETA, reset-aware regression, and time-series statistics.
 

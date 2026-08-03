@@ -157,7 +157,6 @@ class AppSettings:
     always_on_top: bool = True
     start_with_windows: bool = False
     sound_alert: bool = False
-    milestone_size: int = 128
     milestone_step: int = 10
     milestone_duration: int = 5
     refresh_interval_seconds: int = 120
@@ -171,9 +170,6 @@ class AppSettings:
         display_mode = payload.get("display_mode")
         if display_mode not in ("used", "remaining"):
             display_mode = "used"
-        milestone_size = int(number(payload.get("milestone_size")) or 128)
-        if milestone_size not in (64, 96, 128):
-            milestone_size = 128
         milestone_step = int(number(payload.get("milestone_step")) or 10)
         if milestone_step not in (1, 5, 10, 20, 25, 50):
             milestone_step = 10
@@ -188,7 +184,6 @@ class AppSettings:
             always_on_top=bool(payload.get("always_on_top", True)),
             start_with_windows=bool(payload.get("start_with_windows", startup_shortcut_path().exists())),
             sound_alert=bool(payload.get("sound_alert", False)),
-            milestone_size=milestone_size,
             milestone_step=milestone_step,
             milestone_duration=milestone_duration,
             refresh_interval_seconds=refresh_interval_seconds,
@@ -204,7 +199,6 @@ class AppSettings:
                         "always_on_top": self.always_on_top,
                         "start_with_windows": self.start_with_windows,
                         "sound_alert": self.sound_alert,
-                        "milestone_size": self.milestone_size,
                         "milestone_step": self.milestone_step,
                         "milestone_duration": self.milestone_duration,
                         "refresh_interval_seconds": self.refresh_interval_seconds,
@@ -735,110 +729,90 @@ class TrayIcon:
             self._thread.join(timeout=2)
 
 
-class MilestonePopup:
-    """A quiet, text-free icon pulse for each configured usage milestone."""
+class TrayMilestonePopup:
+    """Custom in-app milestone card positioned above the notification area."""
 
     def __init__(self, root: tk.Tk, settings: AppSettings) -> None:
         self.root = root
         self.settings = settings
         self.window: Optional[tk.Toplevel] = None
         self.image: Optional[tk.PhotoImage] = None
-        self.image_size: Optional[int] = None
         self._hide_after_id: Optional[str] = None
-        self._fade_after_id: Optional[str] = None
         self._load_image()
 
     def _load_image(self) -> None:
-        size = self.settings.milestone_size
-        if self.image is not None and self.image_size == size:
+        if self.image is not None:
             return
         try:
             source_image = tk.PhotoImage(file=str(asset_path("usage-orbit-64.png")))
-            if size == 64:
-                self.image = source_image
-            elif size == 96:
-                self.image = source_image.zoom(3, 3).subsample(2, 2)
-            else:
-                self.image = source_image.zoom(2, 2)
-            self.image_size = size
+            self.image = source_image.subsample(2, 2)
         except tk.TclError:
             self.image = None
 
-    def show(self) -> None:
+    def show(self, message: str) -> None:
         self._load_image()
-        if self.image is None:
-            return
         self.close()
+
         popup = tk.Toplevel(self.root)
         popup.overrideredirect(True)
         popup.attributes("-topmost", True)
-        popup.configure(bg=COLORS["ink"])
+        popup.configure(bg=COLORS["line"])
         try:
             popup.attributes("-toolwindow", True)
         except tk.TclError:
             pass
-        try:
-            # The label background disappears, leaving only the generated icon.
-            popup.attributes("-transparentcolor", COLORS["ink"])
-        except tk.TclError:
-            pass
 
-        label = tk.Label(
+        card = tk.Frame(
             popup,
-            image=self.image,
-            bg=COLORS["ink"],
+            bg=COLORS["panel"],
             bd=0,
-            highlightthickness=0,
+            highlightthickness=1,
+            highlightbackground=COLORS["line"],
         )
-        label.pack(padx=6, pady=6)
+        card.pack(padx=1, pady=1)
+
+        content = tk.Frame(card, bg=COLORS["panel"])
+        content.pack(fill="both", padx=14, pady=12)
+        if self.image is not None:
+            tk.Label(
+                content,
+                image=self.image,
+                bg=COLORS["panel"],
+                bd=0,
+                highlightthickness=0,
+            ).pack(side="left", padx=(0, 11))
+
+        copy = tk.Frame(content, bg=COLORS["panel"])
+        copy.pack(side="left", anchor="center")
+        tk.Label(
+            copy,
+            text="CODEX USAGE",
+            bg=COLORS["panel"],
+            fg=COLORS["mint"],
+            font=("Segoe UI", 9, "bold"),
+            anchor="w",
+        ).pack(anchor="w")
+        tk.Label(
+            copy,
+            text=message,
+            bg=COLORS["panel"],
+            fg=COLORS["text"],
+            font=("Segoe UI", 10),
+            anchor="w",
+        ).pack(anchor="w", pady=(3, 0))
+
         popup.update_idletasks()
         width = popup.winfo_reqwidth()
         height = popup.winfo_reqheight()
-        x = max(0, popup.winfo_screenwidth() - width - 24)
-        popup.geometry(f"{width}x{height}+{x}+24")
+        x = max(12, popup.winfo_screenwidth() - width - 24)
+        y = max(12, popup.winfo_screenheight() - height - 72)
+        popup.geometry(f"{width}x{height}+{x}+{y}")
         self.window = popup
         popup.lift()
-        if os.name == "nt":
-            try:
-                # Keep the pulse above the active app without taking focus.
-                _user32.SetWindowPos(
-                    popup.winfo_id(),
-                    -1,  # HWND_TOPMOST
-                    0,
-                    0,
-                    0,
-                    0,
-                    0x0001 | 0x0002 | 0x0010 | 0x0040,  # NOSIZE | NOMOVE | NOACTIVATE | SHOWWINDOW
-                )
-            except Exception:
-                pass
-
-        try:
-            popup.attributes("-alpha", 0.0)
-        except tk.TclError:
-            pass
-        self._fade(0.0, 0.96)
-        # Fade-out takes about 0.7s, so the total duration tracks the setting.
-        fade_out_ms = 700
-        hold_ms = max(300, self.settings.milestone_duration * 1000 - fade_out_ms)
-        self._hide_after_id = self.root.after(hold_ms, lambda: self._fade(0.96, 0.0))
-
-    def _fade(self, current: float, target: float) -> None:
-        if self.window is None:
-            return
-        distance = target - current
-        if abs(distance) <= 0.05:
-            current = target
-        else:
-            current += 0.05 if distance > 0 else -0.05
-        try:
-            self.window.attributes("-alpha", current)
-        except tk.TclError:
-            current = target
-        if current == 0.0:
-            self.close()
-        elif current != target:
-            self._fade_after_id = self.root.after(35, lambda: self._fade(current, target))
+        self._hide_after_id = self.root.after(
+            max(1000, self.settings.milestone_duration * 1000),
+            self.close,
+        )
 
     def close(self) -> None:
         if self._hide_after_id:
@@ -847,12 +821,6 @@ class MilestonePopup:
             except tk.TclError:
                 pass
             self._hide_after_id = None
-        if self._fade_after_id:
-            try:
-                self.root.after_cancel(self._fade_after_id)
-            except tk.TclError:
-                pass
-            self._fade_after_id = None
         if self.window is not None:
             try:
                 self.window.destroy()
@@ -888,7 +856,7 @@ class UsageApp:
         self.icon_image: Optional[tk.PhotoImage] = None
         self.tray_icon_percent: Optional[int] = None
         self.last_tray_tooltip: Optional[str] = None
-        self.milestone_popup = MilestonePopup(self.root, self.settings)
+        self.tray_popup = TrayMilestonePopup(self.root, self.settings)
         self.settings_window: Optional[tk.Toplevel] = None
         self.stats_window: Optional[tk.Toplevel] = None
         self.stats_canvas: Optional[tk.Canvas] = None
@@ -1234,7 +1202,7 @@ class UsageApp:
             return
         if bucket > self.last_alert_bucket:
             self.last_alert_bucket = bucket
-            self.milestone_popup.show()
+            self.tray_popup.show(f"Usage reached {result.used_percent:.0f}%")
             if self.settings.sound_alert:
                 self._play_sound_alert()
 
@@ -1751,20 +1719,19 @@ class UsageApp:
         popup_section.pack(fill="x", pady=(14, 0))
         tk.Label(
             popup_section,
-            text="MILESTONE POPUP",
+            text="TRAY MILESTONE POPUP",
             bg=COLORS["panel"],
             fg=COLORS["muted"],
             font=("Segoe UI", 8, "bold"),
         ).pack(anchor="w")
         tk.Label(
             popup_section,
-            text="Customize the icon size, trigger interval, and duration.",
+            text="Customize the trigger interval and popup duration.",
             bg=COLORS["panel"],
             fg=COLORS["soft"],
             font=("Segoe UI", 9),
         ).pack(anchor="w", pady=(3, 8))
 
-        size_var = tk.StringVar(value=f"{self.settings.milestone_size} px")
         step_var = tk.StringVar(value=f"{self.settings.milestone_step}%")
         duration_label = "second" if self.settings.milestone_duration == 1 else "seconds"
         duration_var = tk.StringVar(value=f"{self.settings.milestone_duration} {duration_label}")
@@ -1789,7 +1756,6 @@ class UsageApp:
             "font": ("Segoe UI", 9),
         }
         popup_options = (
-            ("Icon size", size_var, ("64 px", "96 px", "128 px")),
             ("Trigger every", step_var, ("1%", "5%", "10%", "20%", "25%", "50%")),
             ("Show for", duration_var, ("1 second", "2 seconds", "5 seconds", "10 seconds")),
             (
@@ -1845,7 +1811,6 @@ class UsageApp:
             self.settings.always_on_top = bool(topmost_var.get())
             self.settings.start_with_windows = start_with_windows
             self.settings.sound_alert = bool(sound_var.get())
-            self.settings.milestone_size = int(size_var.get().split()[0])
             self.settings.milestone_step = int(step_var.get().rstrip("%"))
             self.settings.milestone_duration = int(duration_var.get().split()[0])
             self.settings.refresh_interval_seconds = next(
@@ -1895,7 +1860,7 @@ class UsageApp:
 
     def quit(self) -> None:
         try:
-            self.milestone_popup.close()
+            self.tray_popup.close()
             self.close_statistics()
             self.tray.stop()
         finally:
