@@ -534,6 +534,63 @@ if os.name == "nt":
     class _POINT(ctypes.Structure):
         _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
 
+    # ctypes defaults Win32 function results to a 32-bit c_long. Explicitly
+    # declare handle-returning APIs so 64-bit HWND/HICON values are not
+    # truncated before they are handed to the Windows shell.
+    _kernel32.CreateMutexW.restype = wintypes.HANDLE
+    _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    _kernel32.CloseHandle.restype = wintypes.BOOL
+    _kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+    _kernel32.GetModuleHandleW.restype = wintypes.HINSTANCE
+
+    _user32.CreateWindowExW.argtypes = [
+        wintypes.DWORD,
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.HWND,
+        wintypes.HMENU,
+        wintypes.HINSTANCE,
+        wintypes.LPVOID,
+    ]
+    _user32.CreateWindowExW.restype = wintypes.HWND
+    _user32.LoadImageW.argtypes = [
+        wintypes.HINSTANCE,
+        wintypes.LPCWSTR,
+        wintypes.UINT,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.UINT,
+    ]
+    _user32.LoadImageW.restype = wintypes.HICON
+    _user32.DestroyIcon.argtypes = [wintypes.HICON]
+    _user32.DestroyIcon.restype = wintypes.BOOL
+    _user32.DestroyWindow.argtypes = [wintypes.HWND]
+    _user32.DestroyWindow.restype = wintypes.BOOL
+    _user32.RegisterClassW.argtypes = [ctypes.POINTER(_WNDCLASSW)]
+    _user32.RegisterClassW.restype = wintypes.ATOM
+    _user32.UnregisterClassW.argtypes = [wintypes.LPCWSTR, wintypes.HINSTANCE]
+    _user32.UnregisterClassW.restype = wintypes.BOOL
+    _user32.GetCursorPos.argtypes = [ctypes.POINTER(_POINT)]
+    _user32.GetCursorPos.restype = wintypes.BOOL
+    _user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    _user32.PostMessageW.restype = wintypes.BOOL
+    _user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    _user32.DefWindowProcW.restype = _LRESULT
+    _user32.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT]
+    _user32.GetMessageW.restype = ctypes.c_int
+    _user32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
+    _user32.TranslateMessage.restype = wintypes.BOOL
+    _user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
+    _user32.DispatchMessageW.restype = _LRESULT
+    _user32.PostQuitMessage.argtypes = [ctypes.c_int]
+    _shell32.Shell_NotifyIconW.argtypes = [wintypes.DWORD, ctypes.POINTER(_NOTIFYICONDATAW)]
+    _shell32.Shell_NotifyIconW.restype = wintypes.BOOL
+
 
 class TrayIcon:
     """Small ctypes-only notification-area icon, so the app has no tray dependency."""
@@ -876,17 +933,17 @@ class UsageApp:
         self.canvas = tk.Canvas(
             self.root,
             width=460,
-            height=350,
+            height=380,
             bg=COLORS["ink"],
             highlightthickness=0,
             bd=0,
         )
         self.canvas.pack(fill="both", expand=True)
 
-        self.refresh_button = self._make_button("Refresh now", self.refresh_now, COLORS["panel_raised"], 22, 304, 100)
-        self.hide_button = self._make_button("Hide to tray", self.hide_to_tray, COLORS["panel_raised"], 130, 304, 110)
-        self.settings_button = self._make_button("Settings", self.open_settings, COLORS["panel_raised"], 248, 304, 86)
-        self.dashboard_button = self._make_button("Dashboard", self.open_dashboard, COLORS["coral"], 342, 304, 96)
+        self.refresh_button = self._make_button("Refresh now", self.refresh_now, COLORS["panel_raised"], 22, 334, 100)
+        self.hide_button = self._make_button("Hide to tray", self.hide_to_tray, COLORS["panel_raised"], 130, 334, 110)
+        self.settings_button = self._make_button("Settings", self.open_settings, COLORS["panel_raised"], 248, 334, 86)
+        self.dashboard_button = self._make_button("Dashboard", self.open_dashboard, COLORS["coral"], 342, 334, 96)
         self.stats_button = self._make_button("Stats", self.open_statistics, COLORS["panel_raised"], 314, 20, 58)
 
         self.context_menu = tk.Menu(
@@ -916,11 +973,11 @@ class UsageApp:
 
     def _initial_geometry(self) -> str:
         try:
-            width, height = 460, 350
+            width, height = 460, 380
             screen_w = self.root.winfo_screenwidth()
             screen_h = self.root.winfo_screenheight()
         except tk.TclError:
-            return "460x350+40+40"
+            return "460x380+40+40"
         return f"{width}x{height}+{max(20, screen_w - width - 36)}+{max(20, screen_h - height - 80)}"
 
     def _make_button(self, text: str, command: Any, background: str, x: int, y: int, width: int) -> tk.Button:
@@ -958,6 +1015,31 @@ class UsageApp:
 
     def _display_label(self) -> str:
         return "remaining" if self.settings.display_mode == "remaining" else "used"
+
+    def _current_rate(self) -> Optional[float]:
+        """Return the latest smoothed usage rate in percentage points per hour."""
+
+        period_hours = 24 * 7
+        points = self.history.since(period_hours)
+        rate_points = self.history.rate_series(period_hours, points)
+        if not rate_points:
+            return None
+        return rate_points[-1]["rate_per_hour"]
+
+    @staticmethod
+    def _format_rate(rate: Optional[float]) -> str:
+        return f"{rate:+.1f} pts/hr" if rate is not None else "Collecting"
+
+    @staticmethod
+    def _format_eta(current: Optional[float], rate: Optional[float]) -> str:
+        if current is None or rate is None or rate <= 0 or current >= 100:
+            return "n/a"
+        hours_to_limit = (100 - current) / rate
+        if hours_to_limit < 1:
+            return f"{max(1, int(round(hours_to_limit * 60)))}m"
+        if hours_to_limit < 24:
+            return f"{hours_to_limit:.1f}h"
+        return f"{hours_to_limit / 24:.1f}d"
 
     def _set_start_with_windows(self, enabled: bool) -> bool:
         if os.name != "nt":
@@ -1076,7 +1158,7 @@ class UsageApp:
         self._rounded_rect(385, 22, 438, 48, 9, status_color)
         self.canvas.create_text(411, 35, text=status_text, fill=COLORS["ink"], font=("Segoe UI", 8, "bold"))
 
-        self._rounded_rect(16, 72, 444, 246, 18, COLORS["panel"], COLORS["line"])
+        self._rounded_rect(16, 72, 444, 278, 18, COLORS["panel"], COLORS["line"])
 
         # Gauge track and used segment.
         self.canvas.create_arc(34, 91, 190, 247, start=135, extent=-290, style="arc", outline=COLORS["line"], width=13)
@@ -1093,28 +1175,29 @@ class UsageApp:
         self.canvas.create_text(112, 158, text=center_value, fill=COLORS["text"], font=("Segoe UI", 28, "bold"))
         self.canvas.create_text(112, 190, text=self._display_label(), fill=COLORS["muted"], font=("Segoe UI", 9))
 
-        self.canvas.create_text(218, 98, text="CURRENT WINDOW", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
+        current_rate = self._current_rate() if snapshot.has_data else None
+        self.canvas.create_text(218, 105, text="RATE NOW", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
         self.canvas.create_text(
             218,
-            121,
-            text=format_window(snapshot.window_minutes),
+            124,
+            text=self._format_rate(current_rate),
             anchor="w",
-            fill=COLORS["text"],
-            font=("Segoe UI", 16, "bold"),
+            fill=COLORS["amber"],
+            font=("Segoe UI", 9, "bold"),
         )
-        self.canvas.create_text(218, 157, text="PLAN", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
+        self.canvas.create_text(330, 105, text="ETA TO LIMIT", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
         self.canvas.create_text(
-            218,
-            180,
-            text=(snapshot.plan_type or "—").upper(),
+            330,
+            124,
+            text=self._format_eta(snapshot.used_percent, current_rate),
             anchor="w",
             fill=COLORS["mint"],
-            font=("Segoe UI", 15, "bold"),
+            font=("Segoe UI", 9, "bold"),
         )
-        self.canvas.create_text(218, 215, text="RESETS IN", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
+        self.canvas.create_text(218, 174, text="RESETS IN", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
         self.canvas.create_text(
             298,
-            215,
+            174,
             text=format_countdown(snapshot.resets_at),
             anchor="w",
             fill=COLORS["soft"],
@@ -1129,7 +1212,7 @@ class UsageApp:
             signal = format_updated(snapshot.timestamp).replace("Updated ", "signal ", 1)
             footer = f"{checked}  ·  {signal}"
             footer_color = COLORS["muted"]
-        self.canvas.create_text(20, 269, text=footer, anchor="w", fill=footer_color, font=("Segoe UI", 8))
+        self.canvas.create_text(20, 301, text=footer, anchor="w", fill=footer_color, font=("Segoe UI", 8))
 
         if display_percent is not None:
             tray_percent = int(round(clamp(display_percent, 0, 100)))
@@ -1202,7 +1285,9 @@ class UsageApp:
             return
         if bucket > self.last_alert_bucket:
             self.last_alert_bucket = bucket
-            self.tray_popup.show(f"Usage reached {result.used_percent:.0f}%")
+            display_percent = self._display_percent(result)
+            if display_percent is not None:
+                self.tray_popup.show(f"{display_percent:.0f}% {self._display_label()}")
             if self.settings.sound_alert:
                 self._play_sound_alert()
 
