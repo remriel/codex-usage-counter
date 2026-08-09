@@ -34,6 +34,7 @@ HISTORY_FILE = CONFIG_DIR / "usage_history.json"
 HISTORY_RETENTION_DAYS = 30
 HISTORY_MAX_POINTS = 60000
 ACTIVE_SIGNAL_MAX_AGE_SECONDS = 10 * 60
+RATE_WINDOW_MINUTES = 45
 STARTUP_SHORTCUT_NAME = "Codex Usage Counter.lnk"
 
 COLORS = {
@@ -310,7 +311,7 @@ class UsageHistory:
         hours: int,
         points: Optional[list[dict[str, float]]] = None,
     ) -> list[dict[str, float]]:
-        """Return hourly trend rates using a reset-aware regression plus EMA."""
+        """Return recent trend rates using a reset-aware regression plus EMA."""
 
         points = points if points is not None else self.chart_points(hours)
         series: list[dict[str, float]] = []
@@ -326,7 +327,7 @@ class UsageHistory:
         sum_xy = 0.0
 
         for point in points:
-            cutoff = point["timestamp"] - 3 * 3600
+            cutoff = point["timestamp"] - RATE_WINDOW_MINUTES * 60
             while window and window[0][0]["timestamp"] < cutoff:
                 _, old_x, old_y = window.popleft()
                 sum_x -= old_x
@@ -1000,7 +1001,6 @@ class UsageApp:
         self.tray.start("Codex Usage Counter")
         self.root.after(100, self._poll_tray)
         self.root.after(200, self.refresh_async)
-        self.refresh_after_id = self.root.after(self.settings.refresh_interval_seconds * 1000, self._poll_refresh)
         self.root.after(30000, self._refresh_countdown)
         self.root.after(250, self._poll_show_request)
 
@@ -1050,9 +1050,9 @@ class UsageApp:
         return "remaining" if self.settings.display_mode == "remaining" else "used"
 
     def _current_rate(self) -> Optional[float]:
-        """Return the latest smoothed usage rate in percentage points per hour."""
+        """Return the latest smoothed recent usage rate in percentage points per hour."""
 
-        period_hours = 24 * 7
+        period_hours = max(1, (RATE_WINDOW_MINUTES + 59) // 60)
         points = self.history.since(period_hours)
         rate_points = self.history.rate_series(period_hours, points)
         if not rate_points:
@@ -1192,7 +1192,6 @@ class UsageApp:
             self.canvas.create_image(35, 35, image=self.icon_image, anchor="center")
 
         self.canvas.create_text(68, 23, text="CODEX USAGE", anchor="w", fill=COLORS["text"], font=("Segoe UI", 10, "bold"))
-        self.canvas.create_text(68, 42, text="A quiet signal for your active allowance", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8))
 
         if not snapshot.has_data:
             status_text, status_color = "WAITING", COLORS["amber"]
@@ -1290,8 +1289,16 @@ class UsageApp:
     def _poll_refresh(self) -> None:
         self.refresh_after_id = None
         self.refresh_async()
-        if self.root.winfo_exists():
-            self.refresh_after_id = self.root.after(self.settings.refresh_interval_seconds * 1000, self._poll_refresh)
+
+    def _schedule_next_refresh(self) -> None:
+        """Schedule the next automatic usage, rate, and ETA read after this one completes."""
+
+        if self.refresh_after_id is not None or not self.root.winfo_exists():
+            return
+        self.refresh_after_id = self.root.after(
+            self.settings.refresh_interval_seconds * 1000,
+            self._poll_refresh,
+        )
 
     def refresh_async(self) -> None:
         if self.refresh_in_flight:
@@ -1319,6 +1326,7 @@ class UsageApp:
         self._draw()
         if self.stats_window is not None:
             self._render_statistics()
+        self._schedule_next_refresh()
 
     def refresh_now(self) -> None:
         """Read immediately, independently of the two-minute polling timer."""
@@ -1701,7 +1709,7 @@ class UsageApp:
         canvas.create_text(625, 96, text="usage % left | rate pts/hr right", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         scope_label = {24 * 7: "7 DAYS", 24 * 30: "30 DAYS"}.get(self.stats_period_hours, f"{self.stats_period_hours} HOURS")
         canvas.create_text(18, 111, text=f"LAST {scope_label}", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8))
-        canvas.create_text(625, 111, text="3-hour regression + exponential smoothing", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+        canvas.create_text(625, 111, text="45-minute regression + exponential smoothing", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
 
         plot_top, plot_bottom = 128, 508
         self.stats_usage_top = plot_top
@@ -1961,10 +1969,8 @@ class UsageApp:
             self.root.attributes("-topmost", self.settings.always_on_top)
             if self.refresh_after_id:
                 self.root.after_cancel(self.refresh_after_id)
-            self.refresh_after_id = self.root.after(
-                self.settings.refresh_interval_seconds * 1000,
-                self._poll_refresh,
-            )
+            self.refresh_after_id = None
+            self.refresh_async()
             self._draw()
             close_dialog()
 
