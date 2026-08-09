@@ -1088,6 +1088,7 @@ class UsageApp:
         self.settings_window: Optional[tk.Toplevel] = None
         self.stats_window: Optional[tk.Toplevel] = None
         self.stats_canvas: Optional[tk.Canvas] = None
+        self.stats_canvas_size = (0, 0)
         self.stats_readout: Optional[tk.Label] = None
         self.stats_period_hours = 24 * 7
         self.stats_plot_points: list[dict[str, Any]] = []
@@ -1546,9 +1547,10 @@ class UsageApp:
         self.stats_window = dialog
         dialog.title("Codex Usage Statistics")
         dialog.configure(bg=COLORS["ink"])
-        dialog.resizable(False, False)
+        dialog.resizable(True, True)
         dialog.transient(self.root)
-        dialog.geometry("680x696")
+        dialog.attributes("-fullscreen", True)
+        dialog.bind("<Escape>", lambda _event: self.close_statistics())
 
         toolbar = tk.Frame(dialog, bg=COLORS["ink"])
         toolbar.pack(fill="x", padx=18, pady=(14, 7))
@@ -1566,6 +1568,19 @@ class UsageApp:
             fg=COLORS["muted"],
             font=("Segoe UI", 8),
         ).pack(side="left", padx=(9, 0), pady=(2, 0))
+        tk.Button(
+            toolbar,
+            text="Close",
+            command=self.close_statistics,
+            bg=COLORS["coral"],
+            fg=COLORS["ink"],
+            activebackground=COLORS["violet"],
+            activeforeground=COLORS["ink"],
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            font=("Segoe UI", 8, "bold"),
+        ).pack(side="right", ipadx=10, ipady=3)
 
         period_buttons = tk.Frame(dialog, bg=COLORS["ink"])
         period_buttons.pack(fill="x", padx=18, pady=(0, 7))
@@ -1613,22 +1628,23 @@ class UsageApp:
 
         self.stats_canvas = tk.Canvas(
             dialog,
-            width=644,
-            height=560,
             bg=COLORS["panel"],
             highlightthickness=0,
             bd=0,
         )
-        self.stats_canvas.pack(padx=18, pady=(0, 18))
+        self.stats_canvas.pack(fill="both", expand=True)
         self.stats_canvas.bind("<Button-1>", self._select_statistics_point)
         self.stats_canvas.bind("<B1-Motion>", self._select_statistics_point)
-        dialog.update_idletasks()
-        width = dialog.winfo_width()
-        height = dialog.winfo_height()
-        x = max(0, (dialog.winfo_screenwidth() - width) // 2)
-        y = max(0, (dialog.winfo_screenheight() - height) // 2)
-        dialog.geometry(f"{width}x{height}+{x}+{y}")
+        self.stats_canvas.bind("<Configure>", self._resize_statistics)
         dialog.protocol("WM_DELETE_WINDOW", self.close_statistics)
+        dialog.update_idletasks()
+        self._render_statistics()
+
+    def _resize_statistics(self, event: Any) -> None:
+        size = (max(1, int(event.width)), max(1, int(event.height)))
+        if size == self.stats_canvas_size:
+            return
+        self.stats_canvas_size = size
         self._render_statistics()
 
     def set_stats_period(self, hours: int) -> None:
@@ -1644,6 +1660,7 @@ class UsageApp:
                 pass
         self.stats_window = None
         self.stats_canvas = None
+        self.stats_canvas_size = (0, 0)
         self.stats_readout = None
         self.stats_plot_points = []
         self.stats_selected_timestamp = None
@@ -1800,6 +1817,8 @@ class UsageApp:
         if canvas is None:
             return
         canvas.delete("all")
+        canvas_width = max(640, int(canvas.winfo_width()))
+        canvas_height = max(560, int(canvas.winfo_height()))
 
         usage_points = self.history.chart_points(self.stats_period_hours)
         rate_points = self.history.rate_series(self.stats_period_hours, usage_points)
@@ -1824,9 +1843,11 @@ class UsageApp:
             ("RATE NOW", rate_text(current_rate), COLORS["amber"]),
             ("ETA", self._format_eta(current, current_rate, self.snapshot.resets_at), COLORS["mint"]),
         ]
-        card_width = 146
+        card_margin = 14
+        card_gap = 10
+        card_width = (canvas_width - card_margin * 2 - card_gap * 3) / 4
         for index, (label, value, color) in enumerate(cards):
-            x1 = 14 + index * 156
+            x1 = card_margin + index * (card_width + card_gap)
             x2 = x1 + card_width
             canvas.create_rectangle(x1, 14, x2, 76, fill=COLORS["panel_raised"], outline=COLORS["line"])
             canvas.create_text(x1 + 12, 29, text=label, anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
@@ -1835,7 +1856,7 @@ class UsageApp:
         start_time = time.time() - self.stats_period_hours * 3600
         end_time = time.time()
         span = max(1, end_time - start_time)
-        left, right = 50, 580
+        left, right = 50, max(250, canvas_width - 64)
         self.stats_plot_start = start_time
         self.stats_plot_end = end_time
         self.stats_plot_left = left
@@ -1855,15 +1876,15 @@ class UsageApp:
             return left + clamp((epoch - start_time) / span, 0, 1) * (right - left)
 
         canvas.create_text(18, 96, text="USAGE + RATE - MINUTE-LEVEL SAMPLES", anchor="w", fill=COLORS["soft"], font=("Segoe UI", 8, "bold"))
-        canvas.create_text(625, 96, text="usage % left | rate pts/hr right", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+        canvas.create_text(canvas_width - 18, 96, text="usage % left | rate pts/hr right", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         scope_label = {24 * 4: "4 DAYS", 24 * 7: "7 DAYS", 24 * 30: "30 DAYS"}.get(
             self.stats_period_hours,
             f"{self.stats_period_hours} HOURS",
         )
         canvas.create_text(18, 111, text=f"LAST {scope_label}", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8))
-        canvas.create_text(625, 111, text="45-minute regression + 5-minute minimum", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+        canvas.create_text(canvas_width - 18, 111, text="45-minute regression + 5-minute minimum", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
 
-        plot_top, plot_bottom = 128, 508
+        plot_top, plot_bottom = 128, max(308, canvas_height - 34)
         self.stats_usage_top = plot_top
         self.stats_usage_bottom = plot_bottom
         self.stats_rate_top = plot_top
@@ -1900,7 +1921,7 @@ class UsageApp:
             canvas.create_line(left, y, right, y, fill=COLORS["soft"] if value == 0 else COLORS["line"], width=2 if value == 0 else 1)
             sign = "+" if value > 0 else ""
             decimals = 0 if rate_scale >= 100 else 1
-            canvas.create_text(635, y, text=f"{sign}{value:.{decimals}f}", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+            canvas.create_text(canvas_width - 10, y, text=f"{sign}{value:.{decimals}f}", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         if rate_points:
             rate_segments: dict[int, list[float]] = {}
             for point in rate_points:
