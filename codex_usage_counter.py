@@ -1548,7 +1548,7 @@ class UsageApp:
         dialog.configure(bg=COLORS["ink"])
         dialog.resizable(False, False)
         dialog.transient(self.root)
-        dialog.geometry("680x660")
+        dialog.geometry("680x696")
 
         toolbar = tk.Frame(dialog, bg=COLORS["ink"])
         toolbar.pack(fill="x", padx=18, pady=(14, 7))
@@ -1567,8 +1567,8 @@ class UsageApp:
             font=("Segoe UI", 8),
         ).pack(side="left", padx=(9, 0), pady=(2, 0))
 
-        period_buttons = tk.Frame(toolbar, bg=COLORS["ink"])
-        period_buttons.pack(side="right")
+        period_buttons = tk.Frame(dialog, bg=COLORS["ink"])
+        period_buttons.pack(fill="x", padx=18, pady=(0, 7))
         button_style = {
             "bg": COLORS["panel_raised"],
             "fg": COLORS["text"],
@@ -1588,8 +1588,14 @@ class UsageApp:
         tk.Button(period_buttons, text="24 hours", command=lambda: self.set_stats_period(24), **button_style).pack(
             side="left", padx=(0, 5), ipadx=7, ipady=3
         )
+        tk.Button(period_buttons, text="48 hours", command=lambda: self.set_stats_period(48), **button_style).pack(
+            side="left", padx=(0, 5), ipadx=7, ipady=3
+        )
+        tk.Button(period_buttons, text="4 days", command=lambda: self.set_stats_period(24 * 4), **button_style).pack(
+            side="left", padx=(0, 5), ipadx=7, ipady=3
+        )
         tk.Button(period_buttons, text="7 days", command=lambda: self.set_stats_period(24 * 7), **button_style).pack(
-            side="left", ipadx=7, ipady=3
+            side="left", padx=(0, 5), ipadx=7, ipady=3
         )
         tk.Button(period_buttons, text="30 days", command=lambda: self.set_stats_period(24 * 30), **button_style).pack(
             side="left", padx=(5, 0), ipadx=7, ipady=3
@@ -1850,7 +1856,10 @@ class UsageApp:
 
         canvas.create_text(18, 96, text="USAGE + RATE - MINUTE-LEVEL SAMPLES", anchor="w", fill=COLORS["soft"], font=("Segoe UI", 8, "bold"))
         canvas.create_text(625, 96, text="usage % left | rate pts/hr right", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
-        scope_label = {24 * 7: "7 DAYS", 24 * 30: "30 DAYS"}.get(self.stats_period_hours, f"{self.stats_period_hours} HOURS")
+        scope_label = {24 * 4: "4 DAYS", 24 * 7: "7 DAYS", 24 * 30: "30 DAYS"}.get(
+            self.stats_period_hours,
+            f"{self.stats_period_hours} HOURS",
+        )
         canvas.create_text(18, 111, text=f"LAST {scope_label}", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8))
         canvas.create_text(625, 111, text="45-minute regression + 5-minute minimum", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
 
