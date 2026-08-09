@@ -1730,8 +1730,8 @@ class UsageApp:
                 tags="stats-selection",
             )
         if rate is not None:
-            plotted_rate = clamp(rate, -self.stats_rate_scale, self.stats_rate_scale)
-            rate_y = self.stats_rate_top + ((self.stats_rate_scale - plotted_rate) / (2 * self.stats_rate_scale)) * (self.stats_rate_bottom - self.stats_rate_top)
+            plotted_rate = clamp(rate, 0, self.stats_rate_scale)
+            rate_y = self.stats_rate_top + ((self.stats_rate_scale - plotted_rate) / self.stats_rate_scale) * (self.stats_rate_bottom - self.stats_rate_top)
             canvas.create_oval(
                 x - 5,
                 rate_y - 5,
@@ -1922,17 +1922,13 @@ class UsageApp:
 
         rate_values = sorted(abs(point["rate_per_hour"]) for point in rate_points if math.isfinite(point["rate_per_hour"]))
         if rate_values:
-            scale_source = rate_values[min(len(rate_values) - 1, math.ceil(len(rate_values) * 0.95) - 1)]
-            scale_target = max(1.0, scale_source * 1.25)
-            magnitude = 10 ** math.floor(math.log10(scale_target))
-            normalized = scale_target / magnitude
-            nice_factor = 1 if normalized <= 1 else 2 if normalized <= 2 else 5 if normalized <= 5 else 10
-            rate_scale = nice_factor * magnitude
+            observed_max = max(rate_values)
+            rate_scale = max(20.0, math.ceil(observed_max / 20.0) * 20.0)
         else:
-            rate_scale = 1.0
+            rate_scale = 20.0
         self.stats_rate_scale = rate_scale
-        for value in (rate_scale, 0, -rate_scale):
-            y = plot_top + ((rate_scale - value) / (2 * rate_scale)) * (plot_bottom - plot_top)
+        for value in (rate_scale, rate_scale / 2, 0):
+            y = plot_top + ((rate_scale - value) / rate_scale) * (plot_bottom - plot_top)
             canvas.create_line(left, y, right, y, fill=COLORS["soft"] if value == 0 else COLORS["line"], width=2 if value == 0 else 1)
             sign = "+" if value > 0 else ""
             decimals = 0 if rate_scale >= 100 else 1
