@@ -6,7 +6,7 @@ A small Windows desktop counter that keeps your current Codex usage visible with
 
 ## What it does
 
-- Shows the latest local Codex rate-limit percentage, usage window, plan, reset countdown, and signal state.
+- Shows the latest local Codex rate-limit percentage, reset countdown, and signal state.
 - Displays the current number directly in the notification-area tray icon, so it is readable without hovering.
 - Shows a custom in-app tray milestone popup above the Windows notification area; it does not use Windows toast or balloon notifications.
 - Polls local usage every two minutes by default; **Refresh now** reads immediately outside that schedule.
@@ -27,11 +27,11 @@ The executable is self-contained and does not require Python to be installed.
 
 ### Counter window
 
-![Codex Usage Counter window](screenshots/counter.png)
+![Codex Usage Counter window with live rate and ETA](screenshots/counter.png)
 
 ### Statistics view
 
-![Codex Usage Counter statistics view](screenshots/statistics.png)
+![Codex Usage Counter seven-day usage and rate statistics](screenshots/statistics.png)
 
 ## How the data is read
 

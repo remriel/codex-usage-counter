@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.wintypes as wintypes
 import json
+import math
 import os
 import queue
 import subprocess
@@ -32,6 +33,7 @@ CONFIG_FILE = CONFIG_DIR / "settings.json"
 HISTORY_FILE = CONFIG_DIR / "usage_history.json"
 HISTORY_RETENTION_DAYS = 30
 HISTORY_MAX_POINTS = 60000
+ACTIVE_SIGNAL_MAX_AGE_SECONDS = 10 * 60
 STARTUP_SHORTCUT_NAME = "Codex Usage Counter.lnk"
 
 COLORS = {
@@ -66,23 +68,37 @@ def startup_shortcut_path() -> Path:
     return base / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / STARTUP_SHORTCUT_NAME
 
 
+_SHOW_EVENT_NAME = "Local\\CodexUsageCounter.ShowWindow"
+_EVENT_MODIFY_STATE = 0x0002
+_WAIT_OBJECT_0 = 0x00000000
 _instance_mutex: Optional[int] = None
+_show_event: Optional[int] = None
+
+
+def signal_existing_instance() -> None:
+    if os.name != "nt":
+        return
+    event = _kernel32.OpenEventW(_EVENT_MODIFY_STATE, False, _SHOW_EVENT_NAME)
+    if event:
+        _kernel32.SetEvent(event)
+        _kernel32.CloseHandle(event)
 
 
 def acquire_single_instance() -> bool:
     """Keep startup shortcuts and manual launches from creating duplicate counters."""
 
-    global _instance_mutex
+    global _instance_mutex, _show_event
     if os.name != "nt":
         return True
-    kernel32 = ctypes.windll.kernel32
-    handle = kernel32.CreateMutexW(None, False, "Local\\CodexUsageCounter")
+    handle = _kernel32.CreateMutexW(None, False, "Local\\CodexUsageCounter")
     if not handle:
         return True
-    if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-        kernel32.CloseHandle(handle)
+    if _kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        _kernel32.CloseHandle(handle)
+        signal_existing_instance()
         return False
     _instance_mutex = handle
+    _show_event = _kernel32.CreateEventW(None, False, False, _SHOW_EVENT_NAME)
     return True
 
 
@@ -366,7 +382,7 @@ class UsageSnapshot:
 
     @property
     def is_stale(self) -> bool:
-        return bool(self.timestamp and time.time() - self.timestamp > 30 * 60)
+        return bool(self.timestamp and time.time() - self.timestamp > ACTIVE_SIGNAL_MAX_AGE_SECONDS)
 
 
 class CodexTelemetryReader:
@@ -537,7 +553,16 @@ if os.name == "nt":
     # ctypes defaults Win32 function results to a 32-bit c_long. Explicitly
     # declare handle-returning APIs so 64-bit HWND/HICON values are not
     # truncated before they are handed to the Windows shell.
+    _kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
     _kernel32.CreateMutexW.restype = wintypes.HANDLE
+    _kernel32.CreateEventW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+    _kernel32.CreateEventW.restype = wintypes.HANDLE
+    _kernel32.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+    _kernel32.OpenEventW.restype = wintypes.HANDLE
+    _kernel32.SetEvent.argtypes = [wintypes.HANDLE]
+    _kernel32.SetEvent.restype = wintypes.BOOL
+    _kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    _kernel32.WaitForSingleObject.restype = wintypes.DWORD
     _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     _kernel32.CloseHandle.restype = wintypes.BOOL
     _kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
@@ -577,6 +602,8 @@ if os.name == "nt":
     _user32.UnregisterClassW.restype = wintypes.BOOL
     _user32.GetCursorPos.argtypes = [ctypes.POINTER(_POINT)]
     _user32.GetCursorPos.restype = wintypes.BOOL
+    _user32.RegisterWindowMessageW.argtypes = [wintypes.LPCWSTR]
+    _user32.RegisterWindowMessageW.restype = wintypes.UINT
     _user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     _user32.PostMessageW.restype = wintypes.BOOL
     _user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
@@ -608,6 +635,7 @@ class TrayIcon:
         self._tooltip = ""
         self._class_name = f"CodexUsageCounterTray_{os.getpid()}"
         self._callback_message = 0x8000 + 47
+        self._taskbar_created_message = 0
         self._wnd_proc: Any = None
 
     @property
@@ -623,8 +651,12 @@ class TrayIcon:
 
     def _run(self, tooltip: str) -> None:
         assert os.name == "nt"
+        self._taskbar_created_message = _user32.RegisterWindowMessageW("TaskbarCreated")
 
         def wnd_proc(hwnd: int, msg: int, wparam: int, lparam: int) -> int:
+            if msg == self._taskbar_created_message:
+                self._add_icon(self._tooltip)
+                return 0
             if msg == self._callback_message:
                 event = int(lparam)
                 if event in (0x0202, 0x0203):  # left up / double click
@@ -970,6 +1002,7 @@ class UsageApp:
         self.root.after(200, self.refresh_async)
         self.refresh_after_id = self.root.after(self.settings.refresh_interval_seconds * 1000, self._poll_refresh)
         self.root.after(30000, self._refresh_countdown)
+        self.root.after(250, self._poll_show_request)
 
     def _initial_geometry(self) -> str:
         try:
@@ -1024,17 +1057,29 @@ class UsageApp:
         rate_points = self.history.rate_series(period_hours, points)
         if not rate_points:
             return None
-        return rate_points[-1]["rate_per_hour"]
+        rate = rate_points[-1]["rate_per_hour"]
+        return rate if math.isfinite(rate) else None
 
     @staticmethod
     def _format_rate(rate: Optional[float]) -> str:
-        return f"{rate:+.1f} pts/hr" if rate is not None else "Collecting"
+        return f"{rate:+.1f} pts/hr" if rate is not None and math.isfinite(rate) else "Collecting"
 
     @staticmethod
     def _format_eta(current: Optional[float], rate: Optional[float]) -> str:
-        if current is None or rate is None or rate <= 0 or current >= 100:
+        if (
+            current is None
+            or rate is None
+            or not math.isfinite(current)
+            or not math.isfinite(rate)
+            or rate <= 0
+            or current >= 100
+        ):
             return "n/a"
         hours_to_limit = (100 - current) / rate
+        if not math.isfinite(hours_to_limit):
+            return "n/a"
+        if hours_to_limit >= 24 * 365:
+            return ">1y"
         if hours_to_limit < 1:
             return f"{max(1, int(round(hours_to_limit * 60)))}m"
         if hours_to_limit < 24:
@@ -1175,33 +1220,34 @@ class UsageApp:
         self.canvas.create_text(112, 158, text=center_value, fill=COLORS["text"], font=("Segoe UI", 28, "bold"))
         self.canvas.create_text(112, 190, text=self._display_label(), fill=COLORS["muted"], font=("Segoe UI", 9))
 
-        current_rate = self._current_rate() if snapshot.has_data else None
-        self.canvas.create_text(218, 105, text="RATE NOW", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
+        current_rate = self._current_rate() if snapshot.has_data and not snapshot.is_stale else None
+        eta_value = "" if not snapshot.has_data or snapshot.is_stale else self._format_eta(snapshot.used_percent, current_rate)
+        self.canvas.create_text(218, 105, text="RATE NOW", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 10, "bold"))
         self.canvas.create_text(
             218,
             124,
             text=self._format_rate(current_rate),
             anchor="w",
             fill=COLORS["amber"],
-            font=("Segoe UI", 9, "bold"),
+            font=("Segoe UI", 13, "bold"),
         )
-        self.canvas.create_text(330, 105, text="ETA TO LIMIT", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
+        self.canvas.create_text(336, 105, text="ETA TO LIMIT", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 9, "bold"))
         self.canvas.create_text(
-            330,
+            370,
             124,
-            text=self._format_eta(snapshot.used_percent, current_rate),
+            text=eta_value,
             anchor="w",
             fill=COLORS["mint"],
-            font=("Segoe UI", 9, "bold"),
+            font=("Segoe UI", 13, "bold"),
         )
-        self.canvas.create_text(218, 174, text="RESETS IN", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
+        self.canvas.create_text(218, 174, text="RESETS IN", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 10, "bold"))
         self.canvas.create_text(
-            298,
+            325,
             174,
             text=format_countdown(snapshot.resets_at),
             anchor="w",
             fill=COLORS["soft"],
-            font=("Segoe UI", 9, "bold"),
+            font=("Segoe UI", 13, "bold"),
         )
 
         if snapshot.error:
@@ -1232,6 +1278,14 @@ class UsageApp:
         if self.root.winfo_exists():
             self._draw()
             self.root.after(30000, self._refresh_countdown)
+
+    def _poll_show_request(self) -> None:
+        if not self.root.winfo_exists():
+            return
+        if os.name == "nt" and _show_event:
+            if _kernel32.WaitForSingleObject(_show_event, 0) == _WAIT_OBJECT_0:
+                self.show_window()
+        self.root.after(250, self._poll_show_request)
 
     def _poll_refresh(self) -> None:
         self.refresh_after_id = None
@@ -1944,11 +1998,19 @@ class UsageApp:
         dialog.grab_set()
 
     def quit(self) -> None:
+        global _instance_mutex, _show_event
         try:
             self.tray_popup.close()
             self.close_statistics()
             self.tray.stop()
         finally:
+            if os.name == "nt":
+                if _show_event:
+                    _kernel32.CloseHandle(_show_event)
+                    _show_event = None
+                if _instance_mutex:
+                    _kernel32.CloseHandle(_instance_mutex)
+                    _instance_mutex = None
             self.root.destroy()
 
     def run(self) -> None:
