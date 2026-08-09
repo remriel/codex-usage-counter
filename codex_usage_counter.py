@@ -1001,7 +1001,6 @@ class UsageApp:
         self.tray.start("Codex Usage Counter")
         self.root.after(100, self._poll_tray)
         self.root.after(200, self.refresh_async)
-        self.refresh_after_id = self.root.after(self.settings.refresh_interval_seconds * 1000, self._poll_refresh)
         self.root.after(30000, self._refresh_countdown)
         self.root.after(250, self._poll_show_request)
 
@@ -1290,8 +1289,16 @@ class UsageApp:
     def _poll_refresh(self) -> None:
         self.refresh_after_id = None
         self.refresh_async()
-        if self.root.winfo_exists():
-            self.refresh_after_id = self.root.after(self.settings.refresh_interval_seconds * 1000, self._poll_refresh)
+
+    def _schedule_next_refresh(self) -> None:
+        """Schedule the next automatic usage, rate, and ETA read after this one completes."""
+
+        if self.refresh_after_id is not None or not self.root.winfo_exists():
+            return
+        self.refresh_after_id = self.root.after(
+            self.settings.refresh_interval_seconds * 1000,
+            self._poll_refresh,
+        )
 
     def refresh_async(self) -> None:
         if self.refresh_in_flight:
@@ -1319,6 +1326,7 @@ class UsageApp:
         self._draw()
         if self.stats_window is not None:
             self._render_statistics()
+        self._schedule_next_refresh()
 
     def refresh_now(self) -> None:
         """Read immediately, independently of the two-minute polling timer."""
@@ -1961,10 +1969,8 @@ class UsageApp:
             self.root.attributes("-topmost", self.settings.always_on_top)
             if self.refresh_after_id:
                 self.root.after_cancel(self.refresh_after_id)
-            self.refresh_after_id = self.root.after(
-                self.settings.refresh_interval_seconds * 1000,
-                self._poll_refresh,
-            )
+            self.refresh_after_id = None
+            self.refresh_async()
             self._draw()
             close_dialog()
 
