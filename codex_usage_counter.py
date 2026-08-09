@@ -35,6 +35,9 @@ HISTORY_RETENTION_DAYS = 30
 HISTORY_MAX_POINTS = 60000
 ACTIVE_SIGNAL_MAX_AGE_SECONDS = 10 * 60
 RATE_WINDOW_MINUTES = 45
+RATE_MIN_SPAN_MINUTES = 5
+TRANSIENT_DROP_RECOVERY_MINUTES = 5
+RESET_TIME_TOLERANCE_SECONDS = 2
 STARTUP_SHORTCUT_NAME = "Codex Usage Counter.lnk"
 
 COLORS = {
@@ -235,37 +238,120 @@ class UsageHistory:
         self.points: list[dict[str, float]] = self._load()
 
     @staticmethod
-    def _load() -> list[dict[str, float]]:
+    def _point(item: Any) -> Optional[dict[str, float]]:
+        if not isinstance(item, dict):
+            return None
+        timestamp = number(item.get("timestamp"))
+        used_percent = number(item.get("used_percent"))
+        if timestamp is None or used_percent is None or not math.isfinite(timestamp) or not math.isfinite(used_percent):
+            return None
+        point = {"timestamp": timestamp, "used_percent": clamp(used_percent, 0, 100)}
+        resets_at = number(item.get("resets_at"))
+        window_minutes = number(item.get("window_minutes"))
+        if resets_at is not None and math.isfinite(resets_at):
+            point["resets_at"] = resets_at
+        if window_minutes is not None and math.isfinite(window_minutes) and window_minutes > 0:
+            point["window_minutes"] = window_minutes
+        return point
+
+    @staticmethod
+    def _same_limit_window(first: dict[str, float], second: dict[str, float]) -> bool:
+        first_reset = first.get("resets_at")
+        second_reset = second.get("resets_at")
+        if first_reset is None or second_reset is None:
+            return False
+        if abs(first_reset - second_reset) > RESET_TIME_TOLERANCE_SECONDS:
+            return False
+        if max(first["timestamp"], second["timestamp"]) > max(first_reset, second_reset) + RESET_TIME_TOLERANCE_SECONDS:
+            return False
+        first_minutes = first.get("window_minutes")
+        second_minutes = second.get("window_minutes")
+        return first_minutes is None or second_minutes is None or first_minutes == second_minutes
+
+    @staticmethod
+    def _different_limit_window(first: dict[str, float], second: dict[str, float]) -> bool:
+        first_reset = first.get("resets_at")
+        second_reset = second.get("resets_at")
+        if first_reset is not None and second_reset is not None:
+            return abs(first_reset - second_reset) > RESET_TIME_TOLERANCE_SECONDS
+        first_minutes = first.get("window_minutes")
+        second_minutes = second.get("window_minutes")
+        return first_minutes is not None and second_minutes is not None and first_minutes != second_minutes
+
+    @classmethod
+    def _sanitize(cls, points: list[dict[str, float]]) -> list[dict[str, float]]:
+        """Remove stale-session dips without hiding a real allowance reset."""
+
+        buckets: dict[int, dict[str, float]] = {}
+        for item in points:
+            point = cls._point(item)
+            if point is not None:
+                buckets[int(point["timestamp"] // 60) * 60] = point
+        ordered = [buckets[key] for key in sorted(buckets)]
+        cleaned: list[dict[str, float]] = []
+        recovery_seconds = TRANSIENT_DROP_RECOVERY_MINUTES * 60
+        for index, point in enumerate(ordered):
+            if cleaned and point["used_percent"] < cleaned[-1]["used_percent"]:
+                previous = cleaned[-1]
+                if cls._same_limit_window(previous, point):
+                    continue
+                if not cls._different_limit_window(previous, point):
+                    deadline = point["timestamp"] + recovery_seconds
+                    recovered = False
+                    for future in ordered[index + 1 :]:
+                        if future["timestamp"] > deadline or cls._different_limit_window(previous, future):
+                            break
+                        if future["used_percent"] >= previous["used_percent"]:
+                            recovered = True
+                            break
+                    if recovered:
+                        continue
+            cleaned.append(point)
+        return cleaned[-HISTORY_MAX_POINTS:]
+
+    @classmethod
+    def _load(cls) -> list[dict[str, float]]:
         try:
             payload = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError):
             return []
         if not isinstance(payload, list):
             return []
-        buckets: dict[int, dict[str, float]] = {}
-        for item in payload:
-            if not isinstance(item, dict):
-                continue
-            timestamp = number(item.get("timestamp"))
-            used_percent = number(item.get("used_percent"))
-            if timestamp is not None and used_percent is not None:
-                point = {"timestamp": timestamp, "used_percent": clamp(used_percent, 0, 100)}
-                buckets[int(timestamp // 60) * 60] = point
-        return [buckets[key] for key in sorted(buckets)][-HISTORY_MAX_POINTS:]
+        return cls._sanitize(payload)
 
     def record(self, snapshot: UsageSnapshot) -> None:
-        if snapshot.used_percent is None:
+        if snapshot.used_percent is None or snapshot.is_stale:
             return
         now = time.time()
-        point = {"timestamp": now, "used_percent": float(snapshot.used_percent)}
-        if self.points and int(self.points[-1]["timestamp"] // 60) == int(now // 60):
-            if self.points[-1]["used_percent"] == point["used_percent"]:
+        timestamp = snapshot.timestamp if snapshot.timestamp is not None else now
+        if not math.isfinite(timestamp):
+            return
+        point = {"timestamp": timestamp, "used_percent": clamp(float(snapshot.used_percent), 0, 100)}
+        if snapshot.resets_at is not None and math.isfinite(snapshot.resets_at):
+            point["resets_at"] = float(snapshot.resets_at)
+        if snapshot.window_minutes is not None and snapshot.window_minutes > 0:
+            point["window_minutes"] = float(snapshot.window_minutes)
+
+        point_bucket = int(timestamp // 60)
+        if self.points:
+            latest = self.points[-1]
+            latest_bucket = int(latest["timestamp"] // 60)
+            if point_bucket < latest_bucket:
                 return
-            self.points[-1] = point
+            if point_bucket == latest_bucket:
+                if latest == point or latest["timestamp"] > timestamp:
+                    return
+                candidate_points = [*self.points[:-1], point]
+            else:
+                candidate_points = [*self.points, point]
         else:
-            self.points.append(point)
+            candidate_points = [point]
+
+        updated_points = self._sanitize(candidate_points)
+        if updated_points == self.points:
+            return
         cutoff = now - HISTORY_RETENTION_DAYS * 24 * 60 * 60
-        self.points = [item for item in self.points if item["timestamp"] >= cutoff][-HISTORY_MAX_POINTS:]
+        self.points = [item for item in updated_points if item["timestamp"] >= cutoff][-HISTORY_MAX_POINTS:]
         try:
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
             HISTORY_FILE.write_text(json.dumps(self.points), encoding="utf-8")
@@ -288,7 +374,7 @@ class UsageHistory:
     def chart_points(self, hours: int) -> list[dict[str, float]]:
         """Return the minute-level series used by every statistics range."""
 
-        return self.since(hours)
+        return self._sanitize(self.since(hours))
 
     @staticmethod
     def _slope(points: list[dict[str, float]]) -> Optional[float]:
@@ -313,9 +399,10 @@ class UsageHistory:
     ) -> list[dict[str, float]]:
         """Return recent trend rates using a reset-aware regression plus EMA."""
 
-        points = points if points is not None else self.chart_points(hours)
+        points = self._sanitize(points if points is not None else self.chart_points(hours))
         series: list[dict[str, float]] = []
         smoothed: Optional[float] = None
+        segment = 0
         if not points:
             return series
 
@@ -328,20 +415,25 @@ class UsageHistory:
 
         for point in points:
             cutoff = point["timestamp"] - RATE_WINDOW_MINUTES * 60
+            had_window = bool(window)
             while window and window[0][0]["timestamp"] < cutoff:
                 _, old_x, old_y = window.popleft()
                 sum_x -= old_x
                 sum_y -= old_y
                 sum_x_squared -= old_x * old_x
                 sum_xy -= old_x * old_y
+            if had_window and not window:
+                smoothed = None
+                segment += 1
 
-            if window and point["used_percent"] < window[-1][0]["used_percent"] - 5:
+            if window and point["used_percent"] < window[-1][0]["used_percent"]:
                 window.clear()
                 sum_x = 0.0
                 sum_y = 0.0
                 sum_x_squared = 0.0
                 sum_xy = 0.0
                 smoothed = None
+                segment += 1
 
             x = (point["timestamp"] - origin) / 3600
             y = point["used_percent"]
@@ -353,15 +445,20 @@ class UsageHistory:
 
             count = len(window)
             denominator = count * sum_x_squared - sum_x * sum_x
-            if count < 2 or denominator <= 0:
+            elapsed_seconds = point["timestamp"] - window[0][0]["timestamp"]
+            if count < 3 or elapsed_seconds < RATE_MIN_SPAN_MINUTES * 60 or denominator <= 0:
                 continue
             raw_rate = (count * sum_xy - sum_x * sum_y) / denominator
+            if not math.isfinite(raw_rate):
+                continue
+            raw_rate = max(0.0, raw_rate)
             smoothed = raw_rate if smoothed is None else smoothed * 0.65 + raw_rate * 0.35
             series.append(
                 {
                     "timestamp": point["timestamp"],
                     "used_percent": point["used_percent"],
                     "rate_per_hour": smoothed,
+                    "segment": float(segment),
                 }
             )
         return series
@@ -398,16 +495,24 @@ class CodexTelemetryReader:
         self.codex_home = Path(configured_home).expanduser() if configured_home else Path.home() / ".codex"
         self.sessions_dir = self.codex_home / "sessions"
         self._file_cache: dict[str, tuple[int, int, Optional[UsageSnapshot]]] = {}
+        self._latest_snapshot: Optional[UsageSnapshot] = None
 
     @staticmethod
-    def _tail_lines(path: Path, max_bytes: int = 384 * 1024) -> list[str]:
+    def _tail_lines(path: Path, max_bytes: int = 4 * 1024 * 1024) -> list[str]:
         try:
             size = path.stat().st_size
-            with path.open("rb") as handle:
-                if size > max_bytes:
-                    handle.seek(-max_bytes, os.SEEK_END)
-                    handle.readline()
-                data = handle.read()
+            scan_bytes = min(size, min(max_bytes, 384 * 1024))
+            data = b""
+            while True:
+                with path.open("rb") as handle:
+                    start = max(0, size - scan_bytes)
+                    handle.seek(start)
+                    if start:
+                        handle.readline()
+                    data = handle.read()
+                if b'"rate_limits"' in data or scan_bytes >= size or scan_bytes >= max_bytes:
+                    break
+                scan_bytes = min(size, max_bytes, scan_bytes * 2)
             return data.decode("utf-8", errors="ignore").splitlines()
         except (OSError, UnicodeError):
             return []
@@ -488,6 +593,13 @@ class CodexTelemetryReader:
                 snapshot = cached[2]
             else:
                 snapshot = self._read_file(path, metadata.st_mtime)
+                if (
+                    cached is not None
+                    and metadata.st_size > cached[1]
+                    and cached[2] is not None
+                    and (snapshot is None or (cached[2].timestamp or 0) > (snapshot.timestamp or 0))
+                ):
+                    snapshot = cached[2]
             next_cache[cache_key] = (signature[0], signature[1], snapshot)
             if snapshot is not None and snapshot.timestamp is not None:
                 if latest is None or snapshot.timestamp > latest[0]:
@@ -495,7 +607,33 @@ class CodexTelemetryReader:
         self._file_cache = next_cache
 
         if latest:
-            return latest[1]
+            candidate = latest[1]
+            previous = self._latest_snapshot
+            if previous is not None:
+                previous_timestamp = previous.timestamp or 0
+                candidate_timestamp = candidate.timestamp or 0
+                same_window = (
+                    previous.resets_at is not None
+                    and candidate.resets_at is not None
+                    and abs(previous.resets_at - candidate.resets_at) <= RESET_TIME_TOLERANCE_SECONDS
+                    and candidate_timestamp <= max(previous.resets_at, candidate.resets_at) + RESET_TIME_TOLERANCE_SECONDS
+                    and (
+                        previous.window_minutes is None
+                        or candidate.window_minutes is None
+                        or previous.window_minutes == candidate.window_minutes
+                    )
+                )
+                if candidate_timestamp < previous_timestamp or (
+                    same_window
+                    and previous.used_percent is not None
+                    and candidate.used_percent is not None
+                    and candidate.used_percent < previous.used_percent
+                ):
+                    return previous
+            self._latest_snapshot = candidate
+            return candidate
+        if self._latest_snapshot is not None:
+            return self._latest_snapshot
         return UsageSnapshot(error="Open Codex once to populate the local usage signal")
 
 
@@ -1053,9 +1191,9 @@ class UsageApp:
         """Return the latest smoothed recent usage rate in percentage points per hour."""
 
         period_hours = max(1, (RATE_WINDOW_MINUTES + 59) // 60)
-        points = self.history.since(period_hours)
+        points = self.history.chart_points(period_hours)
         rate_points = self.history.rate_series(period_hours, points)
-        if not rate_points:
+        if not points or not rate_points or abs(rate_points[-1]["timestamp"] - points[-1]["timestamp"]) > 1:
             return None
         rate = rate_points[-1]["rate_per_hour"]
         return rate if math.isfinite(rate) else None
@@ -1065,19 +1203,28 @@ class UsageApp:
         return f"{rate:+.1f} pts/hr" if rate is not None and math.isfinite(rate) else "Collecting"
 
     @staticmethod
-    def _format_eta(current: Optional[float], rate: Optional[float]) -> str:
-        if (
-            current is None
-            or rate is None
-            or not math.isfinite(current)
-            or not math.isfinite(rate)
-            or rate <= 0
-            or current >= 100
-        ):
+    def _format_eta(
+        current: Optional[float],
+        rate: Optional[float],
+        resets_at: Optional[float] = None,
+    ) -> str:
+        if current is None or not math.isfinite(current):
+            return "n/a"
+        if current >= 100:
+            return "now"
+        if rate is None or not math.isfinite(rate) or rate <= 0:
             return "n/a"
         hours_to_limit = (100 - current) / rate
-        if not math.isfinite(hours_to_limit):
+        if not math.isfinite(hours_to_limit) or hours_to_limit < 0:
             return "n/a"
+        now = time.time()
+        if (
+            resets_at is not None
+            and math.isfinite(resets_at)
+            and resets_at > now
+            and now + hours_to_limit * 3600 >= resets_at
+        ):
+            return "after reset"
         if hours_to_limit >= 24 * 365:
             return ">1y"
         if hours_to_limit < 1:
@@ -1220,7 +1367,11 @@ class UsageApp:
         self.canvas.create_text(112, 190, text=self._display_label(), fill=COLORS["muted"], font=("Segoe UI", 9))
 
         current_rate = self._current_rate() if snapshot.has_data and not snapshot.is_stale else None
-        eta_value = "" if not snapshot.has_data or snapshot.is_stale else self._format_eta(snapshot.used_percent, current_rate)
+        eta_value = (
+            ""
+            if not snapshot.has_data or snapshot.is_stale
+            else self._format_eta(snapshot.used_percent, current_rate, snapshot.resets_at)
+        )
         self.canvas.create_text(218, 105, text="RATE NOW", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 10, "bold"))
         self.canvas.create_text(
             218,
@@ -1431,10 +1582,10 @@ class UsageApp:
         tk.Button(period_buttons, text="3 hours", command=lambda: self.set_stats_period(3), **button_style).pack(
             side="left", padx=(0, 5), ipadx=7, ipady=3
         )
-        tk.Button(period_buttons, text="24 hours", command=lambda: self.set_stats_period(24), **button_style).pack(
+        tk.Button(period_buttons, text="12 hours", command=lambda: self.set_stats_period(12), **button_style).pack(
             side="left", padx=(0, 5), ipadx=7, ipady=3
         )
-        tk.Button(period_buttons, text="12 hours", command=lambda: self.set_stats_period(12), **button_style).pack(
+        tk.Button(period_buttons, text="24 hours", command=lambda: self.set_stats_period(24), **button_style).pack(
             side="left", padx=(0, 5), ipadx=7, ipady=3
         )
         tk.Button(period_buttons, text="7 days", command=lambda: self.set_stats_period(24 * 7), **button_style).pack(
@@ -1541,7 +1692,8 @@ class UsageApp:
                 tags="stats-selection",
             )
         if rate is not None:
-            rate_y = self.stats_rate_top + ((self.stats_rate_scale - rate) / (2 * self.stats_rate_scale)) * (self.stats_rate_bottom - self.stats_rate_top)
+            plotted_rate = clamp(rate, -self.stats_rate_scale, self.stats_rate_scale)
+            rate_y = self.stats_rate_top + ((self.stats_rate_scale - plotted_rate) / (2 * self.stats_rate_scale)) * (self.stats_rate_bottom - self.stats_rate_top)
             canvas.create_oval(
                 x - 5,
                 rate_y - 5,
@@ -1643,15 +1795,16 @@ class UsageApp:
             return
         canvas.delete("all")
 
-        raw_points = self.history.since(self.stats_period_hours)
-        usage_points = raw_points
+        usage_points = self.history.chart_points(self.stats_period_hours)
         rate_points = self.history.rate_series(self.stats_period_hours, usage_points)
-        current = raw_points[-1]["used_percent"] if raw_points else self.snapshot.used_percent
+        current = usage_points[-1]["used_percent"] if usage_points else self.snapshot.used_percent
         remaining = 100 - current if current is not None else None
-        current_rate = rate_points[-1]["rate_per_hour"] if rate_points else None
+        current_rate = None
+        if usage_points and rate_points and abs(rate_points[-1]["timestamp"] - usage_points[-1]["timestamp"]) <= 1:
+            current_rate = rate_points[-1]["rate_per_hour"]
 
         def rate_text(value: Optional[float]) -> str:
-            return f"{value:+.1f} pts/hr" if value is not None else "Collecting"
+            return self._format_rate(value)
 
         def axis_label(epoch: float) -> str:
             local = datetime.fromtimestamp(epoch).astimezone()
@@ -1659,21 +1812,11 @@ class UsageApp:
                 return local.strftime("%I %p").lstrip("0")
             return f"{local.strftime('%b %d')} {local.strftime('%I %p').lstrip('0')}"
 
-        def eta_text() -> str:
-            if current is None or current_rate is None or current_rate <= 0 or current >= 100:
-                return "n/a"
-            hours_to_limit = (100 - current) / current_rate
-            if hours_to_limit < 1:
-                return f"{max(1, int(round(hours_to_limit * 60)))}m"
-            if hours_to_limit < 24:
-                return f"{hours_to_limit:.1f}h"
-            return f"{hours_to_limit / 24:.1f}d"
-
         cards = [
             ("USED NOW", f"{current:.0f}%" if current is not None else "--", COLORS["violet"]),
             ("REMAINING", f"{remaining:.0f}%" if remaining is not None else "--", COLORS["mint"]),
             ("RATE NOW", rate_text(current_rate), COLORS["amber"]),
-            ("ETA", eta_text(), COLORS["mint"]),
+            ("ETA", self._format_eta(current, current_rate, self.snapshot.resets_at), COLORS["mint"]),
         ]
         card_width = 146
         for index, (label, value, color) in enumerate(cards):
@@ -1686,7 +1829,7 @@ class UsageApp:
         start_time = time.time() - self.stats_period_hours * 3600
         end_time = time.time()
         span = max(1, end_time - start_time)
-        left, right = 50, 625
+        left, right = 50, 580
         self.stats_plot_start = start_time
         self.stats_plot_end = end_time
         self.stats_plot_left = left
@@ -1709,7 +1852,7 @@ class UsageApp:
         canvas.create_text(625, 96, text="usage % left | rate pts/hr right", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         scope_label = {24 * 7: "7 DAYS", 24 * 30: "30 DAYS"}.get(self.stats_period_hours, f"{self.stats_period_hours} HOURS")
         canvas.create_text(18, 111, text=f"LAST {scope_label}", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8))
-        canvas.create_text(625, 111, text="45-minute regression + exponential smoothing", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+        canvas.create_text(625, 111, text="45-minute regression + 5-minute minimum", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
 
         plot_top, plot_bottom = 128, 508
         self.stats_usage_top = plot_top
@@ -1732,21 +1875,32 @@ class UsageApp:
         else:
             canvas.create_text((left + right) / 2, (plot_top + plot_bottom) / 2, text="Keep the counter running to build this graph.", fill=COLORS["muted"], font=("Segoe UI", 10))
 
-        rate_values = [point["rate_per_hour"] for point in rate_points]
-        rate_scale = max(1.0, max((abs(value) for value in rate_values), default=1.0) * 1.25)
+        rate_values = sorted(abs(point["rate_per_hour"]) for point in rate_points if math.isfinite(point["rate_per_hour"]))
+        if rate_values:
+            scale_source = rate_values[min(len(rate_values) - 1, math.ceil(len(rate_values) * 0.95) - 1)]
+            scale_target = max(1.0, scale_source * 1.25)
+            magnitude = 10 ** math.floor(math.log10(scale_target))
+            normalized = scale_target / magnitude
+            nice_factor = 1 if normalized <= 1 else 2 if normalized <= 2 else 5 if normalized <= 5 else 10
+            rate_scale = nice_factor * magnitude
+        else:
+            rate_scale = 1.0
         self.stats_rate_scale = rate_scale
         for value in (rate_scale, 0, -rate_scale):
             y = plot_top + ((rate_scale - value) / (2 * rate_scale)) * (plot_bottom - plot_top)
             canvas.create_line(left, y, right, y, fill=COLORS["soft"] if value == 0 else COLORS["line"], width=2 if value == 0 else 1)
             sign = "+" if value > 0 else ""
-            canvas.create_text(right + 8, y, text=f"{sign}{value:.1f}", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8))
+            decimals = 0 if rate_scale >= 100 else 1
+            canvas.create_text(635, y, text=f"{sign}{value:.{decimals}f}", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         if rate_points:
-            rate_coordinates: list[float] = []
+            rate_segments: dict[int, list[float]] = {}
             for point in rate_points:
-                y = plot_top + ((rate_scale - point["rate_per_hour"]) / (2 * rate_scale)) * (plot_bottom - plot_top)
-                rate_coordinates.extend((x_for(point["timestamp"]), y))
-            if len(rate_coordinates) >= 4:
-                canvas.create_line(*rate_coordinates, fill=COLORS["amber"], width=3)
+                plotted_rate = clamp(point["rate_per_hour"], -rate_scale, rate_scale)
+                y = plot_top + ((rate_scale - plotted_rate) / (2 * rate_scale)) * (plot_bottom - plot_top)
+                rate_segments.setdefault(int(point.get("segment", 0)), []).extend((x_for(point["timestamp"]), y))
+            for coordinates in rate_segments.values():
+                if len(coordinates) >= 4:
+                    canvas.create_line(*coordinates, fill=COLORS["amber"], width=3)
         else:
             canvas.create_text((left + right) / 2, (plot_top + plot_bottom) / 2, text="More samples are needed to estimate a trend rate.", fill=COLORS["muted"], font=("Segoe UI", 10))
 
