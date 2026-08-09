@@ -1535,8 +1535,7 @@ class UsageApp:
         if self.stats_window is not None:
             try:
                 if self.stats_window.winfo_exists():
-                    self.stats_window.lift()
-                    self.stats_window.focus_force()
+                    self._raise_statistics()
                     self._render_statistics()
                     return
             except tk.TclError:
@@ -1550,6 +1549,7 @@ class UsageApp:
         dialog.resizable(True, True)
         dialog.transient(self.root)
         dialog.attributes("-fullscreen", True)
+        dialog.attributes("-topmost", True)
         dialog.bind("<Escape>", lambda _event: self.close_statistics())
 
         toolbar = tk.Frame(dialog, bg=COLORS["ink"])
@@ -1638,7 +1638,22 @@ class UsageApp:
         self.stats_canvas.bind("<Configure>", self._resize_statistics)
         dialog.protocol("WM_DELETE_WINDOW", self.close_statistics)
         dialog.update_idletasks()
+        self._raise_statistics()
+        dialog.after(50, self._raise_statistics)
         self._render_statistics()
+
+    def _raise_statistics(self) -> None:
+        dialog = self.stats_window
+        if dialog is None:
+            return
+        try:
+            if not dialog.winfo_exists():
+                return
+            dialog.attributes("-topmost", True)
+            dialog.lift()
+            dialog.focus_force()
+        except tk.TclError:
+            pass
 
     def _resize_statistics(self, event: Any) -> None:
         size = (max(1, int(event.width)), max(1, int(event.height)))
