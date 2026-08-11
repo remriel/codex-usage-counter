@@ -1091,7 +1091,7 @@ class UsageApp:
         self.stats_canvas: Optional[tk.Canvas] = None
         self.stats_canvas_size = (0, 0)
         self.stats_readout: Optional[tk.Label] = None
-        self.stats_period_hours = 48
+        self.stats_period_hours = 1
         self.stats_plot_points: list[dict[str, Any]] = []
         self.stats_plot_start = 0.0
         self.stats_plot_end = 0.0
@@ -1542,7 +1542,7 @@ class UsageApp:
             except tk.TclError:
                 pass
 
-        self.stats_period_hours = 48
+        self.stats_period_hours = 1
         dialog = tk.Toplevel(self.root)
         self.stats_window = dialog
         dialog.title("Codex Usage Statistics")
@@ -1595,6 +1595,9 @@ class UsageApp:
             "highlightthickness": 0,
             "font": ("Segoe UI", 8, "bold"),
         }
+        tk.Button(period_buttons, text="1 hour", command=lambda: self.set_stats_period(1), **button_style).pack(
+            side="left", padx=(0, 5), ipadx=7, ipady=3
+        )
         tk.Button(period_buttons, text="3 hours", command=lambda: self.set_stats_period(3), **button_style).pack(
             side="left", padx=(0, 5), ipadx=7, ipady=3
         )
@@ -1921,7 +1924,7 @@ class UsageApp:
 
         canvas.create_text(18, 96, text="USAGE + RATE - MINUTE-LEVEL SAMPLES", anchor="w", fill=COLORS["soft"], font=("Segoe UI", 8, "bold"))
         canvas.create_text(canvas_width - 18, 96, text="usage % left | rate pts/hr right", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
-        scope_label = {24 * 4: "4 DAYS", 24 * 7: "7 DAYS", 24 * 30: "30 DAYS"}.get(
+        scope_label = {1: "1 HOUR", 24 * 4: "4 DAYS", 24 * 7: "7 DAYS", 24 * 30: "30 DAYS"}.get(
             self.stats_period_hours,
             f"{self.stats_period_hours} HOURS",
         )
