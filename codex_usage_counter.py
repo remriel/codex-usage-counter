@@ -1934,14 +1934,13 @@ class UsageApp:
             decimals = 0 if rate_scale >= 100 else 1
             canvas.create_text(canvas_width - 10, y, text=f"{sign}{value:.{decimals}f}", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         if rate_points:
-            rate_segments: dict[int, list[float]] = {}
+            coordinates: list[float] = []
             for point in rate_points:
-                plotted_rate = clamp(point["rate_per_hour"], -rate_scale, rate_scale)
-                y = plot_top + ((rate_scale - plotted_rate) / (2 * rate_scale)) * (plot_bottom - plot_top)
-                rate_segments.setdefault(int(point.get("segment", 0)), []).extend((x_for(point["timestamp"]), y))
-            for coordinates in rate_segments.values():
-                if len(coordinates) >= 4:
-                    canvas.create_line(*coordinates, fill=COLORS["amber"], width=3)
+                plotted_rate = clamp(point["rate_per_hour"], 0, rate_scale)
+                y = plot_top + ((rate_scale - plotted_rate) / rate_scale) * (plot_bottom - plot_top)
+                coordinates.extend((x_for(point["timestamp"]), y))
+            if len(coordinates) >= 4:
+                canvas.create_line(*coordinates, fill=COLORS["amber"], width=3)
         else:
             canvas.create_text((left + right) / 2, (plot_top + plot_bottom) / 2, text="More samples are needed to estimate a trend rate.", fill=COLORS["muted"], font=("Segoe UI", 10))
 
