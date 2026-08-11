@@ -36,6 +36,7 @@ HISTORY_MAX_POINTS = 60000
 ACTIVE_SIGNAL_MAX_AGE_SECONDS = 10 * 60
 RATE_WINDOW_MINUTES = 45
 RATE_MIN_SPAN_MINUTES = 5
+RATE_SMOOTHING_POINTS = 7
 TRANSIENT_DROP_RECOVERY_MINUTES = 5
 RESET_TIME_TOLERANCE_SECONDS = 2
 STARTUP_SHORTCUT_NAME = "Codex Usage Counter.lnk"
@@ -397,11 +398,11 @@ class UsageHistory:
         hours: int,
         points: Optional[list[dict[str, float]]] = None,
     ) -> list[dict[str, float]]:
-        """Return recent trend rates using a reset-aware regression plus EMA."""
+        """Return recent trend rates using reset-aware regression plus median smoothing."""
 
         points = self._sanitize(points if points is not None else self.chart_points(hours))
         series: list[dict[str, float]] = []
-        smoothed: Optional[float] = None
+        smoothing_window: deque[float] = deque(maxlen=RATE_SMOOTHING_POINTS)
         segment = 0
         if not points:
             return series
@@ -423,7 +424,7 @@ class UsageHistory:
                 sum_x_squared -= old_x * old_x
                 sum_xy -= old_x * old_y
             if had_window and not window:
-                smoothed = None
+                smoothing_window.clear()
                 segment += 1
 
             if window and point["used_percent"] < window[-1][0]["used_percent"]:
@@ -432,7 +433,7 @@ class UsageHistory:
                 sum_y = 0.0
                 sum_x_squared = 0.0
                 sum_xy = 0.0
-                smoothed = None
+                smoothing_window.clear()
                 segment += 1
 
             x = (point["timestamp"] - origin) / 3600
@@ -444,20 +445,35 @@ class UsageHistory:
             sum_xy += x * y
 
             count = len(window)
-            denominator = count * sum_x_squared - sum_x * sum_x
             elapsed_seconds = point["timestamp"] - window[0][0]["timestamp"]
-            if count < 3 or elapsed_seconds < RATE_MIN_SPAN_MINUTES * 60 or denominator <= 0:
-                continue
-            raw_rate = (count * sum_xy - sum_x * sum_y) / denominator
-            if not math.isfinite(raw_rate):
-                continue
-            raw_rate = max(0.0, raw_rate)
-            smoothed = raw_rate if smoothed is None else smoothed * 0.65 + raw_rate * 0.35
+            unchanged_since = point["timestamp"]
+            for previous, _, _ in reversed(window):
+                if previous["used_percent"] != point["used_percent"]:
+                    break
+                unchanged_since = previous["timestamp"]
+            if point["timestamp"] - unchanged_since >= RATE_MIN_SPAN_MINUTES * 60:
+                smoothing_window.clear()
+                smoothed_rate = 0.0
+            else:
+                denominator = count * sum_x_squared - sum_x * sum_x
+                if count < 3 or elapsed_seconds < RATE_MIN_SPAN_MINUTES * 60 or denominator <= 0:
+                    continue
+                raw_rate = (count * sum_xy - sum_x * sum_y) / denominator
+                if not math.isfinite(raw_rate):
+                    continue
+                raw_rate = max(0.0, raw_rate)
+                smoothing_window.append(raw_rate)
+                ordered_rates = sorted(smoothing_window)
+                midpoint = len(ordered_rates) // 2
+                if len(ordered_rates) % 2:
+                    smoothed_rate = ordered_rates[midpoint]
+                else:
+                    smoothed_rate = (ordered_rates[midpoint - 1] + ordered_rates[midpoint]) / 2
             series.append(
                 {
                     "timestamp": point["timestamp"],
                     "used_percent": point["used_percent"],
-                    "rate_per_hour": smoothed,
+                    "rate_per_hour": smoothed_rate,
                     "segment": float(segment),
                 }
             )
@@ -1090,7 +1106,7 @@ class UsageApp:
         self.stats_canvas: Optional[tk.Canvas] = None
         self.stats_canvas_size = (0, 0)
         self.stats_readout: Optional[tk.Label] = None
-        self.stats_period_hours = 24 * 7
+        self.stats_period_hours = 48
         self.stats_plot_points: list[dict[str, Any]] = []
         self.stats_plot_start = 0.0
         self.stats_plot_end = 0.0
@@ -1541,7 +1557,7 @@ class UsageApp:
             except tk.TclError:
                 pass
 
-        self.stats_period_hours = 24 * 7
+        self.stats_period_hours = 48
         dialog = tk.Toplevel(self.root)
         self.stats_window = dialog
         dialog.title("Codex Usage Statistics")
