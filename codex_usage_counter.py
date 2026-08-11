@@ -36,7 +36,8 @@ HISTORY_RETENTION_DAYS = 30
 HISTORY_MAX_POINTS = 60000
 ACTIVE_SIGNAL_MAX_AGE_SECONDS = 10 * 60
 RATE_WINDOW_MINUTES = 45
-RATE_MIN_SPAN_MINUTES = 5
+RATE_MIN_POINTS = 2
+RATE_MIN_SPAN_SECONDS = 60
 TRANSIENT_DROP_RECOVERY_MINUTES = 5
 RESET_TIME_TOLERANCE_SECONDS = 2
 STARTUP_SHORTCUT_NAME = "Codex Usage Counter.lnk"
@@ -283,12 +284,32 @@ class UsageHistory:
     def _sanitize(cls, points: list[dict[str, float]]) -> list[dict[str, float]]:
         """Remove stale-session dips without hiding a real allowance reset."""
 
-        buckets: dict[int, dict[str, float]] = {}
+        valid_points: list[dict[str, float]] = []
         for item in points:
             point = cls._point(item)
             if point is not None:
-                buckets[int(point["timestamp"] // 60) * 60] = point
-        ordered = [buckets[key] for key in sorted(buckets)]
+                valid_points.append(point)
+
+        ordered: list[dict[str, float]] = []
+        for point in sorted(valid_points, key=lambda candidate: candidate["timestamp"]):
+            if ordered:
+                previous = ordered[-1]
+                same_minute = int(previous["timestamp"] // 60) == int(point["timestamp"] // 60)
+                same_usage = math.isclose(previous["used_percent"], point["used_percent"], abs_tol=0.001)
+                previous_reset = previous.get("resets_at")
+                point_reset = point.get("resets_at")
+                same_reset = (
+                    previous_reset is None and point_reset is None
+                ) or (
+                    previous_reset is not None
+                    and point_reset is not None
+                    and abs(previous_reset - point_reset) <= RESET_TIME_TOLERANCE_SECONDS
+                )
+                same_window = previous.get("window_minutes") == point.get("window_minutes")
+                if same_minute and same_usage and same_reset and same_window:
+                    ordered[-1] = point
+                    continue
+            ordered.append(point)
         cleaned: list[dict[str, float]] = []
         recovery_seconds = TRANSIENT_DROP_RECOVERY_MINUTES * 60
         for index, point in enumerate(ordered):
@@ -339,8 +360,10 @@ class UsageHistory:
             latest_bucket = int(latest["timestamp"] // 60)
             if point_bucket < latest_bucket:
                 return
-            if point_bucket == latest_bucket:
-                if latest == point or latest["timestamp"] > timestamp:
+            if latest["timestamp"] > timestamp:
+                return
+            if latest["timestamp"] == timestamp:
+                if latest == point:
                     return
                 candidate_points = [*self.points[:-1], point]
             else:
@@ -447,7 +470,7 @@ class UsageHistory:
             count = len(window)
             denominator = count * sum_x_squared - sum_x * sum_x
             elapsed_seconds = point["timestamp"] - window[0][0]["timestamp"]
-            if count < 3 or elapsed_seconds < RATE_MIN_SPAN_MINUTES * 60 or denominator <= 0:
+            if count < RATE_MIN_POINTS or elapsed_seconds < RATE_MIN_SPAN_SECONDS or denominator <= 0:
                 continue
             raw_rate = (count * sum_xy - sum_x * sum_y) / denominator
             if not math.isfinite(raw_rate):
@@ -1929,7 +1952,7 @@ class UsageApp:
             f"{self.stats_period_hours} HOURS",
         )
         canvas.create_text(18, 111, text=f"LAST {scope_label}", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8))
-        canvas.create_text(canvas_width - 18, 111, text="45-minute regression + 5-minute minimum", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+        canvas.create_text(canvas_width - 18, 111, text="45-minute regression + 1-minute minimum", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
 
         plot_top, plot_bottom = 128, max(308, canvas_height - 34)
         self.stats_usage_top = plot_top
