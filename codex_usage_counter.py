@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes as wintypes
+from bisect import bisect_right
 import json
 import math
 import os
@@ -36,7 +37,6 @@ HISTORY_MAX_POINTS = 60000
 ACTIVE_SIGNAL_MAX_AGE_SECONDS = 10 * 60
 RATE_WINDOW_MINUTES = 45
 RATE_MIN_SPAN_MINUTES = 5
-RATE_SMOOTHING_POINTS = 7
 TRANSIENT_DROP_RECOVERY_MINUTES = 5
 RESET_TIME_TOLERANCE_SECONDS = 2
 STARTUP_SHORTCUT_NAME = "Codex Usage Counter.lnk"
@@ -398,11 +398,11 @@ class UsageHistory:
         hours: int,
         points: Optional[list[dict[str, float]]] = None,
     ) -> list[dict[str, float]]:
-        """Return recent trend rates using reset-aware regression plus median smoothing."""
+        """Return recent trend rates using a reset-aware regression plus EMA."""
 
         points = self._sanitize(points if points is not None else self.chart_points(hours))
         series: list[dict[str, float]] = []
-        smoothing_window: deque[float] = deque(maxlen=RATE_SMOOTHING_POINTS)
+        smoothed: Optional[float] = None
         segment = 0
         if not points:
             return series
@@ -424,7 +424,7 @@ class UsageHistory:
                 sum_x_squared -= old_x * old_x
                 sum_xy -= old_x * old_y
             if had_window and not window:
-                smoothing_window.clear()
+                smoothed = None
                 segment += 1
 
             if window and point["used_percent"] < window[-1][0]["used_percent"]:
@@ -433,7 +433,7 @@ class UsageHistory:
                 sum_y = 0.0
                 sum_x_squared = 0.0
                 sum_xy = 0.0
-                smoothing_window.clear()
+                smoothed = None
                 segment += 1
 
             x = (point["timestamp"] - origin) / 3600
@@ -445,35 +445,20 @@ class UsageHistory:
             sum_xy += x * y
 
             count = len(window)
+            denominator = count * sum_x_squared - sum_x * sum_x
             elapsed_seconds = point["timestamp"] - window[0][0]["timestamp"]
-            unchanged_since = point["timestamp"]
-            for previous, _, _ in reversed(window):
-                if previous["used_percent"] != point["used_percent"]:
-                    break
-                unchanged_since = previous["timestamp"]
-            if point["timestamp"] - unchanged_since >= RATE_MIN_SPAN_MINUTES * 60:
-                smoothing_window.clear()
-                smoothed_rate = 0.0
-            else:
-                denominator = count * sum_x_squared - sum_x * sum_x
-                if count < 3 or elapsed_seconds < RATE_MIN_SPAN_MINUTES * 60 or denominator <= 0:
-                    continue
-                raw_rate = (count * sum_xy - sum_x * sum_y) / denominator
-                if not math.isfinite(raw_rate):
-                    continue
-                raw_rate = max(0.0, raw_rate)
-                smoothing_window.append(raw_rate)
-                ordered_rates = sorted(smoothing_window)
-                midpoint = len(ordered_rates) // 2
-                if len(ordered_rates) % 2:
-                    smoothed_rate = ordered_rates[midpoint]
-                else:
-                    smoothed_rate = (ordered_rates[midpoint - 1] + ordered_rates[midpoint]) / 2
+            if count < 3 or elapsed_seconds < RATE_MIN_SPAN_MINUTES * 60 or denominator <= 0:
+                continue
+            raw_rate = (count * sum_xy - sum_x * sum_y) / denominator
+            if not math.isfinite(raw_rate):
+                continue
+            raw_rate = max(0.0, raw_rate)
+            smoothed = raw_rate if smoothed is None else smoothed * 0.65 + raw_rate * 0.35
             series.append(
                 {
                     "timestamp": point["timestamp"],
                     "used_percent": point["used_percent"],
-                    "rate_per_hour": smoothed_rate,
+                    "rate_per_hour": smoothed,
                     "segment": float(segment),
                 }
             )
@@ -1106,7 +1091,7 @@ class UsageApp:
         self.stats_canvas: Optional[tk.Canvas] = None
         self.stats_canvas_size = (0, 0)
         self.stats_readout: Optional[tk.Label] = None
-        self.stats_period_hours = 48
+        self.stats_period_hours = 1
         self.stats_plot_points: list[dict[str, Any]] = []
         self.stats_plot_start = 0.0
         self.stats_plot_end = 0.0
@@ -1557,7 +1542,7 @@ class UsageApp:
             except tk.TclError:
                 pass
 
-        self.stats_period_hours = 48
+        self.stats_period_hours = 1
         dialog = tk.Toplevel(self.root)
         self.stats_window = dialog
         dialog.title("Codex Usage Statistics")
@@ -1610,6 +1595,9 @@ class UsageApp:
             "highlightthickness": 0,
             "font": ("Segoe UI", 8, "bold"),
         }
+        tk.Button(period_buttons, text="1 hour", command=lambda: self.set_stats_period(1), **button_style).pack(
+            side="left", padx=(0, 5), ipadx=7, ipady=3
+        )
         tk.Button(period_buttons, text="3 hours", command=lambda: self.set_stats_period(3), **button_style).pack(
             side="left", padx=(0, 5), ipadx=7, ipady=3
         )
@@ -1906,9 +1894,37 @@ class UsageApp:
         def x_for(epoch: float) -> float:
             return left + clamp((epoch - start_time) / span, 0, 1) * (right - left)
 
+        gap_threshold_seconds = max(
+            ACTIVE_SIGNAL_MAX_AGE_SECONDS,
+            self.settings.refresh_interval_seconds * 3,
+        )
+        recording_gap_starts = [
+            current["timestamp"]
+            for previous, current in zip(usage_points, usage_points[1:])
+            if current["timestamp"] - previous["timestamp"] > gap_threshold_seconds
+        ]
+
+        def crosses_recording_gap(previous_timestamp: float, current_timestamp: float) -> bool:
+            gap_index = bisect_right(recording_gap_starts, previous_timestamp)
+            return gap_index < len(recording_gap_starts) and recording_gap_starts[gap_index] <= current_timestamp
+
+        def draw_recorded_segments(points: list[dict[str, float]], y_for: Any, color: str) -> None:
+            coordinates: list[float] = []
+            previous_timestamp: Optional[float] = None
+            for point in points:
+                timestamp = point["timestamp"]
+                if previous_timestamp is not None and crosses_recording_gap(previous_timestamp, timestamp):
+                    if len(coordinates) >= 4:
+                        canvas.create_line(*coordinates, fill=color, width=3)
+                    coordinates = []
+                coordinates.extend((x_for(timestamp), y_for(point)))
+                previous_timestamp = timestamp
+            if len(coordinates) >= 4:
+                canvas.create_line(*coordinates, fill=color, width=3)
+
         canvas.create_text(18, 96, text="USAGE + RATE - MINUTE-LEVEL SAMPLES", anchor="w", fill=COLORS["soft"], font=("Segoe UI", 8, "bold"))
         canvas.create_text(canvas_width - 18, 96, text="usage % left | rate pts/hr right", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
-        scope_label = {24 * 4: "4 DAYS", 24 * 7: "7 DAYS", 24 * 30: "30 DAYS"}.get(
+        scope_label = {1: "1 HOUR", 24 * 4: "4 DAYS", 24 * 7: "7 DAYS", 24 * 30: "30 DAYS"}.get(
             self.stats_period_hours,
             f"{self.stats_period_hours} HOURS",
         )
@@ -1928,7 +1944,12 @@ class UsageApp:
         if usage_points:
             coordinates: list[float] = []
             for point in usage_points:
-                coordinates.extend((x_for(point["timestamp"]), plot_bottom - (point["used_percent"] / 100) * (plot_bottom - plot_top)))
+                coordinates.extend(
+                    (
+                        x_for(point["timestamp"]),
+                        plot_bottom - (point["used_percent"] / 100) * (plot_bottom - plot_top),
+                    )
+                )
             if len(coordinates) >= 4:
                 canvas.create_line(*coordinates, fill=COLORS["violet"], width=3)
             latest_x, latest_y = coordinates[-2:]
@@ -1950,13 +1971,13 @@ class UsageApp:
             decimals = 0 if rate_scale >= 100 else 1
             canvas.create_text(canvas_width - 10, y, text=f"{sign}{value:.{decimals}f}", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         if rate_points:
-            coordinates: list[float] = []
-            for point in rate_points:
-                plotted_rate = clamp(point["rate_per_hour"], 0, rate_scale)
-                y = plot_top + ((rate_scale - plotted_rate) / rate_scale) * (plot_bottom - plot_top)
-                coordinates.extend((x_for(point["timestamp"]), y))
-            if len(coordinates) >= 4:
-                canvas.create_line(*coordinates, fill=COLORS["amber"], width=3)
+            draw_recorded_segments(
+                rate_points,
+                lambda point: plot_top
+                + ((rate_scale - clamp(point["rate_per_hour"], 0, rate_scale)) / rate_scale)
+                * (plot_bottom - plot_top),
+                COLORS["amber"],
+            )
         else:
             canvas.create_text((left + right) / 2, (plot_top + plot_bottom) / 2, text="More samples are needed to estimate a trend rate.", fill=COLORS["muted"], font=("Segoe UI", 10))
 
