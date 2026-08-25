@@ -26,6 +26,7 @@ Track the restored 5-hour Codex allowance alongside the weekly allowance, packag
 - Keep `used_percent` as the weekly history field for backward compatibility; store 5-hour values in explicit `five_hour_*` fields.
 - Show the most constrained window in the numeric tray icon and both windows in the tooltip/main screen.
 - Preserve previous weekly history and leave pre-feature 5-hour history missing rather than inventing values.
+- Keep the Statistics cards as the primary selection readout: clicking or dragging the chart updates all card values to the selected timestamp.
 
 ## Relevant files
 
@@ -50,7 +51,10 @@ Track the restored 5-hour Codex allowance alongside the weekly allowance, packag
 - A non-interactive Tk render test passed with 68 main-window canvas elements, 81 Statistics elements, and live 5-hour points in the Statistics inspection data.
 - The installed build launched with `5H` and `Week` values in its title. The expected PyInstaller parent/child process pair is running.
 - Desktop, Downloads, and Documents contain no remaining `CodexUsageCounter-v*.exe` or `CodexUsageCounter-source-v*.zip` files.
+- Selection interaction test passed: all 12 Statistics card values changed to a historical point and the readout now only identifies the selected timestamp.
+- The final executable was rebuilt after the selection and mouse-wheel changes, installed over the unversioned launcher, and relaunched successfully; build and installed SHA-256 hashes match.
+- The stale unversioned `dist\CodexUsageCounter-source.zip` archive was moved to the Recycle Bin; settings, history, source, and the current executable were preserved.
 
 ## Next steps
 
-1. Commit README/screenshot updates, publish the current executable release, and update the GitHub repository description.
+1. Commit the Statistics card-selection update and sync the source branch to GitHub.

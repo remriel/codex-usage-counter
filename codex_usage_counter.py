@@ -1415,6 +1415,9 @@ class UsageApp:
         self.stats_canvas: Optional[tk.Canvas] = None
         self.stats_canvas_size = (0, 0)
         self.stats_readout: Optional[tk.Label] = None
+        self.stats_card_value_items: list[int] = []
+        self.stats_live_card_data: dict[str, Any] = {}
+        self.stats_usage_points: list[dict[str, Any]] = []
         self.stats_period_hours = 1
         self.stats_plot_points: list[dict[str, Any]] = []
         self.stats_plot_start = 0.0
@@ -1999,7 +2002,7 @@ class UsageApp:
 
         self.stats_readout = tk.Label(
             dialog,
-            text="Click or drag across the plot to inspect a point",
+            text="LIVE VALUES  ·  click or drag across the plot to inspect a point",
             bg=COLORS["ink"],
             fg=COLORS["muted"],
             anchor="w",
@@ -2016,6 +2019,7 @@ class UsageApp:
         self.stats_canvas.pack(fill="both", expand=True)
         self.stats_canvas.bind("<Button-1>", self._select_statistics_point)
         self.stats_canvas.bind("<B1-Motion>", self._select_statistics_point)
+        self.stats_canvas.bind("<MouseWheel>", self._scroll_statistics_point)
         self.stats_canvas.bind("<Configure>", self._resize_statistics)
         dialog.protocol("WM_DELETE_WINDOW", self.close_statistics)
         dialog.update_idletasks()
@@ -2058,6 +2062,9 @@ class UsageApp:
         self.stats_canvas = None
         self.stats_canvas_size = (0, 0)
         self.stats_readout = None
+        self.stats_card_value_items = []
+        self.stats_live_card_data = {}
+        self.stats_usage_points = []
         self.stats_plot_points = []
         self.stats_selected_timestamp = None
 
@@ -2071,14 +2078,83 @@ class UsageApp:
         self.stats_selected_timestamp = selected["timestamp"]
         self._draw_statistics_selection()
 
+    def _scroll_statistics_point(self, event: Any) -> None:
+        """Move the selected point one sample at a time with the mouse wheel."""
+
+        if not self.stats_plot_points:
+            return
+        if self.stats_selected_timestamp is None:
+            current_index = len(self.stats_plot_points) - 1
+        else:
+            current_index = min(
+                range(len(self.stats_plot_points)),
+                key=lambda index: abs(self.stats_plot_points[index]["timestamp"] - self.stats_selected_timestamp),
+            )
+        direction = -1 if getattr(event, "delta", 0) > 0 else 1
+        selected_index = max(0, min(len(self.stats_plot_points) - 1, current_index + direction))
+        self.stats_selected_timestamp = self.stats_plot_points[selected_index]["timestamp"]
+        self._draw_statistics_selection()
+
+    def _update_statistics_cards(self, point: Optional[dict[str, Any]]) -> None:
+        """Make the visible cards describe the selected chart point, or live data."""
+
+        if not self.stats_card_value_items:
+            return
+        data = point if point is not None else self.stats_live_card_data
+        five_hour_used = number(data.get("five_hour_used_percent"))
+        weekly_used = number(data.get("used_percent"))
+        five_hour_rate = number(data.get("five_hour_rate_per_hour"))
+        weekly_rate = number(data.get("rate_per_hour"))
+        five_hour_reset = number(data.get("five_hour_resets_at"))
+        weekly_reset = number(data.get("resets_at"))
+        total_tokens = number(data.get("total_tokens"))
+        last_tokens = number(data.get("last_tokens"))
+        token_rate = number(data.get("token_rate_per_minute"))
+
+        scoped_points = self.stats_usage_points
+        if point is not None:
+            scoped_points = [
+                candidate
+                for candidate in self.stats_usage_points
+                if candidate["timestamp"] <= point["timestamp"]
+            ]
+        weekly_tokens_per_point = self.history.token_efficiency(self.stats_period_hours, scoped_points)
+        five_hour_tokens_per_point = self.history.token_efficiency(
+            self.stats_period_hours,
+            scoped_points,
+            value_field="five_hour_used_percent",
+            resets_field="five_hour_resets_at",
+        )
+
+        def percent_text(value: Optional[float]) -> str:
+            return f"{value:.0f}%" if value is not None and math.isfinite(value) else "--"
+
+        values = [
+            percent_text(five_hour_used),
+            percent_text(100 - five_hour_used if five_hour_used is not None else None),
+            percent_text(weekly_used),
+            percent_text(100 - weekly_used if weekly_used is not None else None),
+            self._format_rate(five_hour_rate),
+            self._format_eta(five_hour_used, five_hour_rate, five_hour_reset),
+            self._format_rate(weekly_rate),
+            self._format_eta(weekly_used, weekly_rate, weekly_reset),
+            format_token_count(total_tokens),
+            format_token_count(last_tokens),
+            format_token_rate(token_rate),
+            f"{format_token_count(five_hour_tokens_per_point)} · {format_token_count(weekly_tokens_per_point)}",
+        ]
+        for item_id, value in zip(self.stats_card_value_items, values):
+            self.stats_canvas.itemconfigure(item_id, text=value)
+
     def _draw_statistics_selection(self) -> None:
         canvas = self.stats_canvas
         if canvas is None:
             return
         canvas.delete("stats-selection")
         if self.stats_selected_timestamp is None or not self.stats_plot_points:
+            self._update_statistics_cards(None)
             if self.stats_readout is not None:
-                self.stats_readout.configure(text="Click or drag across the plot to inspect a point")
+                self.stats_readout.configure(text="LIVE VALUES  ·  click or drag across the plot to inspect a point")
             return
         selected = min(
             self.stats_plot_points,
@@ -2167,14 +2243,9 @@ class UsageApp:
             )
         local = datetime.fromtimestamp(selected["timestamp"]).astimezone()
         when = f"{local.strftime('%b %d')} {local.strftime('%I:%M %p').lstrip('0')}"
-        weekly_text = f"week {used:.1f}%" if used is not None else "week n/a"
-        five_hour_text = f"5h {five_hour_used:.1f}%" if five_hour_used is not None else "5h n/a"
-        rate_text = f"week pace {rate:+.2f} pts/hr" if rate is not None else "week pace collecting"
-        five_hour_rate_text = f"5h pace {five_hour_rate:+.2f} pts/hr" if five_hour_rate is not None else "5h pace collecting"
-        token_text = f"tokens {format_token_count(selected.get('total_tokens'))}"
-        token_rate_text = f"pace {format_token_rate(token_rate)}"
+        self._update_statistics_cards(selected)
         if self.stats_readout is not None:
-            self.stats_readout.configure(text=f"{when}  |  {five_hour_text}  |  {weekly_text}  |  {five_hour_rate_text}  |  {rate_text}  |  {token_text}  |  {token_rate_text}")
+            self.stats_readout.configure(text=f"SELECTED {when}  ·  cards updated")
 
     def _render_statistics_legacy(self) -> None:
         canvas = self.stats_canvas
@@ -2263,6 +2334,7 @@ class UsageApp:
         canvas_height = max(560, int(canvas.winfo_height()))
 
         usage_points = self.history.chart_points(self.stats_period_hours)
+        self.stats_usage_points = usage_points
         rate_points = self.history.rate_series(self.stats_period_hours, usage_points)
         five_hour_rate_points = self.history.rate_series(
             self.stats_period_hours,
@@ -2293,6 +2365,17 @@ class UsageApp:
             value_field="five_hour_used_percent",
             resets_field="five_hour_resets_at",
         )
+        self.stats_live_card_data = {
+            "five_hour_used_percent": five_hour_current,
+            "five_hour_resets_at": self.snapshot.five_hour_resets_at,
+            "used_percent": current,
+            "resets_at": self.snapshot.resets_at,
+            "five_hour_rate_per_hour": five_hour_current_rate,
+            "rate_per_hour": current_rate,
+            "total_tokens": current_tokens,
+            "last_tokens": self.snapshot.last_tokens,
+            "token_rate_per_minute": current_token_rate,
+        }
 
         def rate_text(value: Optional[float]) -> str:
             return self._format_rate(value)
@@ -2328,6 +2411,7 @@ class UsageApp:
         card_margin = 14
         card_gap = 10
         card_width = (canvas_width - card_margin * 2 - card_gap * 3) / 4
+        self.stats_card_value_items = []
         for row_index, cards in enumerate((usage_cards, pace_cards, token_cards)):
             y1 = 14 + row_index * 70
             y2 = y1 + 62
@@ -2336,7 +2420,8 @@ class UsageApp:
                 x2 = x1 + card_width
                 canvas.create_rectangle(x1, y1, x2, y2, fill=COLORS["panel_raised"], outline=COLORS["line"])
                 canvas.create_text(x1 + 12, y1 + 15, text=label, anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
-                canvas.create_text(x1 + 12, y1 + 41, text=value, anchor="w", fill=color, font=("Segoe UI", 12, "bold"))
+                value_item = canvas.create_text(x1 + 12, y1 + 41, text=value, anchor="w", fill=color, font=("Segoe UI", 12, "bold"))
+                self.stats_card_value_items.append(value_item)
 
         start_time = time.time() - self.stats_period_hours * 3600
         end_time = time.time()
@@ -2351,11 +2436,14 @@ class UsageApp:
             plot_point = {"timestamp": point["timestamp"], "used_percent": point["used_percent"]}
             for field in (
                 "five_hour_used_percent",
+                "resets_at",
+                "five_hour_resets_at",
                 "total_tokens",
                 "input_tokens",
                 "cached_input_tokens",
                 "output_tokens",
                 "reasoning_tokens",
+                "last_tokens",
             ):
                 if field in point:
                     plot_point[field] = point[field]
