@@ -6,16 +6,16 @@ A small Windows desktop counter that keeps your current Codex usage visible with
 
 ## What it does
 
-- Shows the latest local Codex rate-limit percentage, reset countdown, and signal state.
+- Shows independent 5-hour and weekly Codex allowance percentages, reset countdowns, pace, and ETA.
 - Tracks current-task input, cached-input, output, reasoning, total, and last-response token counts from local Codex aggregate telemetry.
 - Refreshes within about a second when an already-discovered active Codex session file changes; configurable polling remains the fallback.
-- Displays the current number directly in the notification-area tray icon, so it is readable without hovering.
+- Displays the most constrained allowance directly in the notification-area tray icon, so the number is useful without hovering; the tooltip identifies both windows.
 - Shows a custom in-app tray milestone popup above the Windows notification area; it does not use Windows toast or balloon notifications.
 - Polls local usage every two minutes by default; every automatic read refreshes usage, rate, and ETA together, while **Refresh now** reads immediately outside that schedule.
 - Supports Used or Remaining display mode, always-on-top behavior, optional Start with Windows behavior, optional custom milestone chime, configurable polling, trigger percentage, and popup duration.
 - Keeps minute-level usage history with 1-hour, 3-hour, 12-hour, 24-hour, 48-hour, 4-day, 7-day, and 30-day overlapping usage/rate graphs; Statistics opens to the 1-hour view by default.
 - Opens Statistics as a fullscreen view with a responsive, edge-to-edge chart canvas.
-- Provides click-and-drag point inspection, smoothed percentage-rate trends, token activity, observed tokens per allowance point, ETA, reset-aware regression, and time-series statistics.
+- Provides click-and-drag point inspection, separate 5-hour and weekly usage/rate lines, token activity, observed tokens per allowance point, ETA, reset-aware regression, and time-series statistics.
 
 ## Quick start on Windows
 
@@ -44,7 +44,9 @@ The counter reads aggregate `rate_limits` and `token_count` events from JSONL fi
 %USERPROFILE%\.codex\sessions
 ```
 
-It does not read `auth.json`, API keys, cookies, browser profiles, or conversation content. Token totals are scoped to the currently active local Codex task. The token-to-percentage statistic is an observed relationship, not a fixed conversion: model behavior, caching, reasoning, concurrent tasks, and delayed allowance reporting can change it. The usage dashboard link opens the official dashboard for the authoritative view. Because the counter is based on local session telemetry, it can show a stale signal until a newer Codex event is written; **Refresh now** forces an immediate local read.
+The reader identifies allowance windows by their reported duration: 300 minutes for the 5-hour limit and 10,080 minutes for the weekly limit. It does not assume `primary` always means weekly, so both windows remain correct if their field positions change. Historical weekly samples remain available; the 5-hour line begins when Codex first reports that window and is not fabricated for earlier periods.
+
+It does not read `auth.json`, API keys, cookies, browser profiles, or conversation content. Token totals are scoped to the currently active local Codex task. Token-to-percentage statistics are observed relationships, not fixed conversions: model behavior, caching, reasoning, concurrent tasks, and delayed allowance reporting can change them. The usage dashboard link opens the official dashboard for the authoritative view. Because the counter is based on local session telemetry, it can show a stale signal until a newer Codex event is written; **Refresh now** forces an immediate local read.
 
 Closing the window hides it to the tray. Use the tray menu’s **Quit** command to exit.
 

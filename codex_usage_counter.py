@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 import webbrowser
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from collections import deque
 from pathlib import Path
@@ -43,6 +43,8 @@ SIGNAL_WATCH_INTERVAL_MS = 1000
 TRANSIENT_DROP_RECOVERY_MINUTES = 5
 RESET_TIME_TOLERANCE_SECONDS = 2
 STARTUP_SHORTCUT_NAME = "Codex Usage Counter.lnk"
+FIVE_HOUR_WINDOW_MINUTES = 5 * 60
+WEEKLY_WINDOW_MINUTES = 7 * 24 * 60
 
 COLORS = {
     "ink": "#0d1224",
@@ -275,6 +277,15 @@ class UsageHistory:
             point["resets_at"] = resets_at
         if window_minutes is not None and math.isfinite(window_minutes) and window_minutes > 0:
             point["window_minutes"] = window_minutes
+        five_hour_used = number(item.get("five_hour_used_percent"))
+        five_hour_resets = number(item.get("five_hour_resets_at"))
+        five_hour_minutes = number(item.get("five_hour_window_minutes"))
+        if five_hour_used is not None and math.isfinite(five_hour_used):
+            point["five_hour_used_percent"] = clamp(five_hour_used, 0, 100)
+        if five_hour_resets is not None and math.isfinite(five_hour_resets):
+            point["five_hour_resets_at"] = five_hour_resets
+        if five_hour_minutes is not None and math.isfinite(five_hour_minutes) and five_hour_minutes > 0:
+            point["five_hour_window_minutes"] = five_hour_minutes
         for field in (
             "input_tokens",
             "cached_input_tokens",
@@ -342,8 +353,13 @@ class UsageHistory:
                     and abs(previous_reset - point_reset) <= RESET_TIME_TOLERANCE_SECONDS
                 )
                 same_window = previous.get("window_minutes") == point.get("window_minutes")
+                same_five_hour = (
+                    previous.get("five_hour_used_percent") == point.get("five_hour_used_percent")
+                    and previous.get("five_hour_resets_at") == point.get("five_hour_resets_at")
+                    and previous.get("five_hour_window_minutes") == point.get("five_hour_window_minutes")
+                )
                 same_session = previous.get("session_id") == point.get("session_id")
-                if same_minute and same_usage and same_reset and same_window and same_session:
+                if same_minute and same_usage and same_reset and same_window and same_five_hour and same_session:
                     ordered[-1] = point
                     continue
             ordered.append(point)
@@ -390,6 +406,12 @@ class UsageHistory:
             point["resets_at"] = float(snapshot.resets_at)
         if snapshot.window_minutes is not None and snapshot.window_minutes > 0:
             point["window_minutes"] = float(snapshot.window_minutes)
+        if snapshot.five_hour_used_percent is not None and math.isfinite(snapshot.five_hour_used_percent):
+            point["five_hour_used_percent"] = clamp(float(snapshot.five_hour_used_percent), 0, 100)
+        if snapshot.five_hour_resets_at is not None and math.isfinite(snapshot.five_hour_resets_at):
+            point["five_hour_resets_at"] = float(snapshot.five_hour_resets_at)
+        if snapshot.five_hour_window_minutes is not None and snapshot.five_hour_window_minutes > 0:
+            point["five_hour_window_minutes"] = float(snapshot.five_hour_window_minutes)
         for field in (
             "input_tokens",
             "cached_input_tokens",
@@ -480,10 +502,12 @@ class UsageHistory:
         self,
         hours: int,
         points: Optional[list[dict[str, Any]]] = None,
+        value_field: str = "used_percent",
     ) -> list[dict[str, Any]]:
         """Return recent trend rates using a reset-aware regression plus EMA."""
 
         points = self._sanitize(points if points is not None else self.chart_points(hours))
+        points = [point for point in points if number(point.get(value_field)) is not None]
         series: list[dict[str, Any]] = []
         smoothed: Optional[float] = None
         segment = 0
@@ -510,7 +534,7 @@ class UsageHistory:
                 smoothed = None
                 segment += 1
 
-            if window and point["used_percent"] < window[-1][0]["used_percent"]:
+            if window and float(point[value_field]) < float(window[-1][0][value_field]):
                 window.clear()
                 sum_x = 0.0
                 sum_y = 0.0
@@ -520,7 +544,7 @@ class UsageHistory:
                 segment += 1
 
             x = (point["timestamp"] - origin) / 3600
-            y = point["used_percent"]
+            y = float(point[value_field])
             window.append((point, x, y))
             sum_x += x
             sum_y += y
@@ -540,7 +564,8 @@ class UsageHistory:
             series.append(
                 {
                     "timestamp": point["timestamp"],
-                    "used_percent": point["used_percent"],
+                    "used_percent": y,
+                    "value_field": value_field,
                     "rate_per_hour": smoothed,
                     "segment": float(segment),
                 }
@@ -596,6 +621,8 @@ class UsageHistory:
         self,
         hours: int,
         points: Optional[list[dict[str, Any]]] = None,
+        value_field: str = "used_percent",
+        resets_field: str = "resets_at",
     ) -> Optional[float]:
         """Return observed current-task tokens per allowance percentage point."""
 
@@ -605,19 +632,25 @@ class UsageHistory:
             return None
         latest = token_points[-1]
         cutoff = latest["timestamp"] - RATE_WINDOW_MINUTES * 60
+        latest_usage = number(latest.get(value_field))
+        latest_reset = number(latest.get(resets_field))
+        if latest_usage is None or latest_reset is None:
+            return None
         candidates = [
             point
             for point in token_points
             if point["timestamp"] >= cutoff
             and point.get("session_id") == latest.get("session_id")
-            and self._same_limit_window(point, latest)
-            and point["used_percent"] < latest["used_percent"]
+            and number(point.get(resets_field)) is not None
+            and abs(float(point[resets_field]) - latest_reset) <= RESET_TIME_TOLERANCE_SECONDS
+            and number(point.get(value_field)) is not None
+            and float(point[value_field]) < latest_usage
         ]
         if not candidates:
             return None
         baseline = candidates[0]
         token_delta = float(latest["total_tokens"]) - float(baseline["total_tokens"])
-        usage_delta = latest["used_percent"] - baseline["used_percent"]
+        usage_delta = latest_usage - float(baseline[value_field])
         if token_delta <= 0 or usage_delta <= 0:
             return None
         return token_delta / usage_delta
@@ -628,6 +661,9 @@ class UsageSnapshot:
     used_percent: Optional[float] = None
     window_minutes: Optional[int] = None
     resets_at: Optional[float] = None
+    five_hour_used_percent: Optional[float] = None
+    five_hour_window_minutes: Optional[int] = None
+    five_hour_resets_at: Optional[float] = None
     plan_type: Optional[str] = None
     timestamp: Optional[float] = None
     source_path: Optional[str] = None
@@ -642,7 +678,7 @@ class UsageSnapshot:
 
     @property
     def has_data(self) -> bool:
-        return self.used_percent is not None
+        return self.used_percent is not None or self.five_hour_used_percent is not None
 
     @property
     def is_stale(self) -> bool:
@@ -697,6 +733,41 @@ class CodexTelemetryReader:
         if isinstance(info, dict) and isinstance(info.get("rate_limits"), dict):
             return info["rate_limits"]
         return None
+
+    @staticmethod
+    def _allowance_windows(limits: dict[str, Any]) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
+        """Return the 5-hour and weekly windows using duration, not field position."""
+
+        windows = [limits.get("primary"), limits.get("secondary")]
+        windows = [window for window in windows if isinstance(window, dict)]
+        five_hour = next(
+            (window for window in windows if int(number(window.get("window_minutes")) or 0) == FIVE_HOUR_WINDOW_MINUTES),
+            None,
+        )
+        weekly = next(
+            (window for window in windows if int(number(window.get("window_minutes")) or 0) == WEEKLY_WINDOW_MINUTES),
+            None,
+        )
+        if five_hour is None:
+            five_hour = next(
+                (
+                    window
+                    for window in windows
+                    if 0 < int(number(window.get("window_minutes")) or 0) <= FIVE_HOUR_WINDOW_MINUTES
+                ),
+                None,
+            )
+        if weekly is None:
+            longer = [
+                window
+                for window in windows
+                if int(number(window.get("window_minutes")) or 0) > FIVE_HOUR_WINDOW_MINUTES
+            ]
+            if longer:
+                weekly = max(longer, key=lambda window: int(number(window.get("window_minutes")) or 0))
+            elif len(windows) == 1 and number(windows[0].get("window_minutes")) is None:
+                weekly = windows[0]
+        return five_hour, weekly
 
     def _candidate_files(self) -> list[Path]:
         try:
@@ -753,13 +824,10 @@ class CodexTelemetryReader:
             limits = self._rate_limits(event)
             if not limits:
                 continue
-            primary = limits.get("primary")
-            secondary = limits.get("secondary")
-            selected = primary if isinstance(primary, dict) else secondary
-            if not isinstance(selected, dict):
-                continue
-            used = number(selected.get("used_percent"))
-            if used is None:
+            five_hour, weekly = self._allowance_windows(limits)
+            five_hour_used = number(five_hour.get("used_percent")) if five_hour else None
+            weekly_used = number(weekly.get("used_percent")) if weekly else None
+            if five_hour_used is None and weekly_used is None:
                 continue
             payload = event.get("payload")
             info = payload.get("info") if isinstance(payload, dict) else None
@@ -784,9 +852,12 @@ class CodexTelemetryReader:
                 token_values = latest_token_values
             timestamp = parse_timestamp(event.get("timestamp")) or file_mtime
             snapshot = UsageSnapshot(
-                used_percent=clamp(used, 0, 100),
-                window_minutes=int(number(selected.get("window_minutes")) or 0) or None,
-                resets_at=number(selected.get("resets_at")),
+                used_percent=clamp(weekly_used, 0, 100) if weekly_used is not None else None,
+                window_minutes=int(number(weekly.get("window_minutes")) or 0) or None if weekly else None,
+                resets_at=number(weekly.get("resets_at")) if weekly else None,
+                five_hour_used_percent=clamp(five_hour_used, 0, 100) if five_hour_used is not None else None,
+                five_hour_window_minutes=int(number(five_hour.get("window_minutes")) or 0) or None if five_hour else None,
+                five_hour_resets_at=number(five_hour.get("resets_at")) if five_hour else None,
                 plan_type=str(limits.get("plan_type") or "").strip() or None,
                 timestamp=timestamp,
                 source_path=str(path),
@@ -851,13 +922,39 @@ class CodexTelemetryReader:
                         or previous.window_minutes == candidate.window_minutes
                     )
                 )
-                if candidate_timestamp < previous_timestamp or (
+                if candidate_timestamp < previous_timestamp:
+                    return previous
+                if (
                     same_window
                     and previous.used_percent is not None
                     and candidate.used_percent is not None
                     and candidate.used_percent < previous.used_percent
                 ):
-                    return previous
+                    candidate = replace(
+                        candidate,
+                        used_percent=previous.used_percent,
+                        window_minutes=previous.window_minutes,
+                        resets_at=previous.resets_at,
+                    )
+                same_five_hour_window = (
+                    previous.five_hour_resets_at is not None
+                    and candidate.five_hour_resets_at is not None
+                    and abs(previous.five_hour_resets_at - candidate.five_hour_resets_at) <= RESET_TIME_TOLERANCE_SECONDS
+                    and candidate_timestamp
+                    <= max(previous.five_hour_resets_at, candidate.five_hour_resets_at) + RESET_TIME_TOLERANCE_SECONDS
+                )
+                if (
+                    same_five_hour_window
+                    and previous.five_hour_used_percent is not None
+                    and candidate.five_hour_used_percent is not None
+                    and candidate.five_hour_used_percent < previous.five_hour_used_percent
+                ):
+                    candidate = replace(
+                        candidate,
+                        five_hour_used_percent=previous.five_hour_used_percent,
+                        five_hour_window_minutes=previous.five_hour_window_minutes,
+                        five_hour_resets_at=previous.five_hour_resets_at,
+                    )
             self._latest_snapshot = candidate
             return candidate
         if self._latest_snapshot is not None:
@@ -1306,7 +1403,7 @@ class UsageApp:
         self.history = UsageHistory()
         self.snapshot = UsageSnapshot()
         self.last_checked_at: Optional[float] = None
-        self.last_alert_bucket: Optional[int] = None
+        self.last_alert_buckets: dict[str, int] = {}
         self.refresh_in_flight = False
         self.refresh_after_id: Optional[str] = None
         self.icon_image: Optional[tk.PhotoImage] = None
@@ -1336,17 +1433,17 @@ class UsageApp:
         self.canvas = tk.Canvas(
             self.root,
             width=460,
-            height=380,
+            height=440,
             bg=COLORS["ink"],
             highlightthickness=0,
             bd=0,
         )
         self.canvas.pack(fill="both", expand=True)
 
-        self.refresh_button = self._make_button("Refresh now", self.refresh_now, COLORS["panel_raised"], 22, 334, 100)
-        self.hide_button = self._make_button("Hide to tray", self.hide_to_tray, COLORS["panel_raised"], 130, 334, 110)
-        self.settings_button = self._make_button("Settings", self.open_settings, COLORS["panel_raised"], 248, 334, 86)
-        self.dashboard_button = self._make_button("Dashboard", self.open_dashboard, COLORS["coral"], 342, 334, 96)
+        self.refresh_button = self._make_button("Refresh now", self.refresh_now, COLORS["panel_raised"], 22, 394, 100)
+        self.hide_button = self._make_button("Hide to tray", self.hide_to_tray, COLORS["panel_raised"], 130, 394, 110)
+        self.settings_button = self._make_button("Settings", self.open_settings, COLORS["panel_raised"], 248, 394, 86)
+        self.dashboard_button = self._make_button("Dashboard", self.open_dashboard, COLORS["coral"], 342, 394, 96)
         self.stats_button = self._make_button("Stats", self.open_statistics, COLORS["panel_raised"], 314, 20, 58)
 
         self.context_menu = tk.Menu(
@@ -1377,11 +1474,11 @@ class UsageApp:
 
     def _initial_geometry(self) -> str:
         try:
-            width, height = 460, 380
+            width, height = 460, 440
             screen_w = self.root.winfo_screenwidth()
             screen_h = self.root.winfo_screenheight()
         except tk.TclError:
-            return "460x380+40+40"
+            return "460x440+40+40"
         return f"{width}x{height}+{max(20, screen_w - width - 36)}+{max(20, screen_h - height - 80)}"
 
     def _make_button(self, text: str, command: Any, background: str, x: int, y: int, width: int) -> tk.Button:
@@ -1411,22 +1508,35 @@ class UsageApp:
         self.canvas.create_oval(x2 - radius * 2, y2 - radius * 2, x2, y2, fill=fill, outline=outline)
 
     def _display_percent(self, snapshot: UsageSnapshot) -> Optional[float]:
-        if snapshot.used_percent is None:
+        available = [
+            value
+            for value in (snapshot.five_hour_used_percent, snapshot.used_percent)
+            if value is not None
+        ]
+        if not available:
             return None
+        # The tray number represents whichever allowance is closer to its limit.
+        used_percent = max(available)
         if self.settings.display_mode == "remaining":
-            return 100 - snapshot.used_percent
-        return snapshot.used_percent
+            return 100 - used_percent
+        return used_percent
+
+    def _display_value(self, used_percent: Optional[float]) -> Optional[float]:
+        if used_percent is None:
+            return None
+        return 100 - used_percent if self.settings.display_mode == "remaining" else used_percent
 
     def _display_label(self) -> str:
         return "remaining" if self.settings.display_mode == "remaining" else "used"
 
-    def _current_rate(self) -> Optional[float]:
+    def _current_rate(self, value_field: str = "used_percent") -> Optional[float]:
         """Return the latest smoothed recent usage rate in percentage points per hour."""
 
         period_hours = max(1, (RATE_WINDOW_MINUTES + 59) // 60)
         points = self.history.chart_points(period_hours)
-        rate_points = self.history.rate_series(period_hours, points)
-        if not points or not rate_points or abs(rate_points[-1]["timestamp"] - points[-1]["timestamp"]) > 1:
+        rate_points = self.history.rate_series(period_hours, points, value_field=value_field)
+        field_points = [point for point in points if number(point.get(value_field)) is not None]
+        if not field_points or not rate_points or abs(rate_points[-1]["timestamp"] - field_points[-1]["timestamp"]) > 1:
             return None
         rate = rate_points[-1]["rate_per_hour"]
         return rate if math.isfinite(rate) else None
@@ -1594,83 +1704,65 @@ class UsageApp:
         self._rounded_rect(385, 22, 438, 48, 9, status_color)
         self.canvas.create_text(411, 35, text=status_text, fill=COLORS["ink"], font=("Segoe UI", 8, "bold"))
 
-        self._rounded_rect(16, 72, 444, 278, 18, COLORS["panel"], COLORS["line"])
+        def draw_allowance_card(
+            x1: int,
+            x2: int,
+            label: str,
+            used: Optional[float],
+            resets_at: Optional[float],
+            color: str,
+        ) -> None:
+            self._rounded_rect(x1, 72, x2, 178, 14, COLORS["panel"], COLORS["line"])
+            shown = self._display_value(used)
+            self.canvas.create_text(x1 + 14, 88, text=label, anchor="w", fill=color, font=("Segoe UI", 10, "bold"))
+            self.canvas.create_text(
+                x1 + 14,
+                123,
+                text=f"{shown:.0f}%" if shown is not None else "--",
+                anchor="w",
+                fill=COLORS["text"],
+                font=("Segoe UI", 25, "bold"),
+            )
+            self.canvas.create_text(x1 + 88, 123, text=self._display_label(), anchor="w", fill=COLORS["muted"], font=("Segoe UI", 9, "bold"))
+            self.canvas.create_text(x1 + 14, 146, text=f"RESET {format_countdown(resets_at)}", anchor="w", fill=COLORS["soft"], font=("Segoe UI", 9, "bold"))
+            self.canvas.create_rectangle(x1 + 14, 162, x2 - 14, 168, fill=COLORS["line"], outline="")
+            if shown is not None:
+                bar_right = x1 + 14 + clamp(shown, 0, 100) / 100 * (x2 - x1 - 28)
+                self.canvas.create_rectangle(x1 + 14, 162, bar_right, 168, fill=color, outline="")
 
-        # Gauge track and used segment.
-        self.canvas.create_arc(34, 91, 190, 247, start=135, extent=-290, style="arc", outline=COLORS["line"], width=13)
-        if display_percent is not None:
-            extent = -290 * clamp(display_percent, 0, 100) / 100
-            if self.settings.display_mode == "remaining":
-                gauge_color = COLORS["mint"] if display_percent >= 20 else COLORS["coral"]
-            else:
-                gauge_color = COLORS["coral"] if display_percent >= 80 else COLORS["violet"]
-            self.canvas.create_arc(34, 91, 190, 247, start=135, extent=extent, style="arc", outline=gauge_color, width=13)
-            center_value = f"{display_percent:.0f}%"
-        else:
-            center_value = "—"
-        self.canvas.create_text(112, 158, text=center_value, fill=COLORS["text"], font=("Segoe UI", 28, "bold"))
-        self.canvas.create_text(112, 190, text=self._display_label(), fill=COLORS["muted"], font=("Segoe UI", 9))
+        draw_allowance_card(16, 224, "5-HOUR LIMIT", snapshot.five_hour_used_percent, snapshot.five_hour_resets_at, COLORS["cyan"])
+        draw_allowance_card(236, 444, "WEEKLY LIMIT", snapshot.used_percent, snapshot.resets_at, COLORS["violet"])
 
-        current_rate = self._current_rate() if snapshot.has_data and not snapshot.is_stale else None
-        eta_value = (
-            ""
-            if not snapshot.has_data or snapshot.is_stale
-            else self._format_eta(snapshot.used_percent, current_rate, snapshot.resets_at)
-        )
-        self.canvas.create_text(218, 105, text="RATE NOW", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 10, "bold"))
-        self.canvas.create_text(
-            218,
-            124,
-            text=self._format_rate(current_rate),
-            anchor="w",
-            fill=COLORS["amber"],
-            font=("Segoe UI", 13, "bold"),
-        )
-        self.canvas.create_text(336, 105, text="ETA TO LIMIT", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 9, "bold"))
-        self.canvas.create_text(
-            370,
-            124,
-            text=eta_value,
-            anchor="w",
-            fill=COLORS["mint"],
-            font=("Segoe UI", 13, "bold"),
-        )
-        self.canvas.create_text(218, 174, text="RESETS IN", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 10, "bold"))
-        self.canvas.create_text(
-            325,
-            174,
-            text=format_countdown(snapshot.resets_at),
-            anchor="w",
-            fill=COLORS["soft"],
-            font=("Segoe UI", 13, "bold"),
-        )
+        five_hour_rate = self._current_rate("five_hour_used_percent") if snapshot.has_data and not snapshot.is_stale else None
+        weekly_rate = self._current_rate() if snapshot.has_data and not snapshot.is_stale else None
+        five_hour_eta = "" if not snapshot.has_data or snapshot.is_stale else self._format_eta(snapshot.five_hour_used_percent, five_hour_rate, snapshot.five_hour_resets_at)
+        weekly_eta = "" if not snapshot.has_data or snapshot.is_stale else self._format_eta(snapshot.used_percent, weekly_rate, snapshot.resets_at)
+        self._rounded_rect(16, 190, 444, 302, 14, COLORS["panel"], COLORS["line"])
+        self.canvas.create_line(230, 202, 230, 290, fill=COLORS["line"], width=2)
+        for x, label, rate, eta, color in (
+            (30, "5-HOUR PACE", five_hour_rate, five_hour_eta, COLORS["cyan"]),
+            (244, "WEEKLY PACE", weekly_rate, weekly_eta, COLORS["violet"]),
+        ):
+            self.canvas.create_text(x, 207, text=label, anchor="w", fill=color, font=("Segoe UI", 9, "bold"))
+            self.canvas.create_text(x, 235, text=self._format_rate(rate), anchor="w", fill=COLORS["amber"], font=("Segoe UI", 15, "bold"))
+            self.canvas.create_text(x, 266, text="ETA TO LIMIT", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 9, "bold"))
+            self.canvas.create_text(x + 92, 266, text=eta, anchor="w", fill=COLORS["mint"], font=("Segoe UI", 12, "bold"))
+            resets = snapshot.five_hour_resets_at if label.startswith("5-") else snapshot.resets_at
+            self.canvas.create_text(x, 288, text=f"resets in {format_countdown(resets)}", anchor="w", fill=COLORS["soft"], font=("Segoe UI", 9, "bold"))
 
         token_rate = self._current_token_rate() if snapshot.total_tokens is not None and not snapshot.is_stale else None
-        self.canvas.create_text(218, 210, text="TASK TOKENS", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 9, "bold"))
-        self.canvas.create_text(
-            218,
-            231,
-            text=format_token_count(snapshot.total_tokens),
-            anchor="w",
-            fill=COLORS["cyan"],
-            font=("Segoe UI", 15, "bold"),
-        )
-        self.canvas.create_text(336, 210, text="TOKENS/MIN", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 9, "bold"))
-        self.canvas.create_text(
-            336,
-            231,
-            text=format_token_rate(token_rate),
-            anchor="w",
-            fill=COLORS["coral"],
-            font=("Segoe UI", 11, "bold"),
-        )
+        self._rounded_rect(16, 314, 444, 354, 10, COLORS["panel_raised"], COLORS["line"])
+        self.canvas.create_text(30, 327, text="TASK TOKENS", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
+        self.canvas.create_text(30, 344, text=format_token_count(snapshot.total_tokens), anchor="w", fill=COLORS["cyan"], font=("Segoe UI", 12, "bold"))
+        self.canvas.create_text(141, 327, text="TOKENS/MIN", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
+        self.canvas.create_text(141, 344, text=format_token_rate(token_rate), anchor="w", fill=COLORS["coral"], font=("Segoe UI", 10, "bold"))
         cached_share = None
         if snapshot.input_tokens is not None and snapshot.input_tokens > 0 and snapshot.cached_input_tokens is not None:
             cached_share = clamp(snapshot.cached_input_tokens / snapshot.input_tokens * 100, 0, 100)
-        token_detail = f"last {format_token_count(snapshot.last_tokens)}"
+        token_detail = f"LAST {format_token_count(snapshot.last_tokens)}"
         if cached_share is not None:
-            token_detail += f"  ·  {cached_share:.0f}% input cached"
-        self.canvas.create_text(218, 258, text=token_detail, anchor="w", fill=COLORS["soft"], font=("Segoe UI", 8, "bold"))
+            token_detail += f"  ·  {cached_share:.0f}% CACHED"
+        self.canvas.create_text(270, 338, text=token_detail, anchor="w", fill=COLORS["soft"], font=("Segoe UI", 8, "bold"))
 
         if snapshot.error:
             footer = f"{snapshot.error}  ·  {format_updated(self.last_checked_at).replace('Updated ', 'Checked ', 1)}"
@@ -1680,13 +1772,17 @@ class UsageApp:
             signal = format_updated(snapshot.timestamp).replace("Updated ", "signal ", 1)
             footer = f"{checked}  ·  {signal}"
             footer_color = COLORS["muted"]
-        self.canvas.create_text(20, 301, text=footer, anchor="w", fill=footer_color, font=("Segoe UI", 8))
+        self.canvas.create_text(20, 372, text=footer, anchor="w", fill=footer_color, font=("Segoe UI", 8))
 
         if display_percent is not None:
             tray_percent = int(round(clamp(display_percent, 0, 100)))
             self._set_tray_icon(tray_percent)
-            taskbar_label = f"Codex Usage • {display_percent:.0f}% {self._display_label()}"
-            tray_tip = f"Codex Usage • {display_percent:.0f}% {self._display_label()} • resets in {format_countdown(snapshot.resets_at)}"
+            five_hour_display = self._display_value(snapshot.five_hour_used_percent)
+            weekly_display = self._display_value(snapshot.used_percent)
+            five_hour_text = f"{five_hour_display:.0f}%" if five_hour_display is not None else "--"
+            weekly_text = f"{weekly_display:.0f}%" if weekly_display is not None else "--"
+            taskbar_label = f"Codex Usage • 5H {five_hour_text} • Week {weekly_text} {self._display_label()}"
+            tray_tip = f"Codex • 5H {five_hour_text} • Week {weekly_text} {self._display_label()}"
         else:
             self._set_tray_icon(None)
             taskbar_label = "Codex Usage Counter"
@@ -1764,22 +1860,26 @@ class UsageApp:
         self.refresh_async()
 
     def _maybe_show_milestone(self, result: UsageSnapshot) -> None:
-        if result.used_percent is None:
-            return
-        bucket = int(result.used_percent // self.settings.milestone_step)
-        if self.last_alert_bucket is None:
-            # Establish the baseline silently on startup.
-            self.last_alert_bucket = bucket
-            return
-        if bucket < self.last_alert_bucket:
-            # A reset or window change moved usage backwards; re-arm quietly.
-            self.last_alert_bucket = bucket
-            return
-        if bucket > self.last_alert_bucket:
-            self.last_alert_bucket = bucket
-            display_percent = self._display_percent(result)
-            if display_percent is not None:
-                self.tray_popup.show(f"{display_percent:.0f}% {self._display_label()}")
+        alerts: list[str] = []
+        for key, label, used_percent in (
+            ("5-hour", "5H", result.five_hour_used_percent),
+            ("weekly", "WEEK", result.used_percent),
+        ):
+            if used_percent is None:
+                continue
+            bucket = int(used_percent // self.settings.milestone_step)
+            previous = self.last_alert_buckets.get(key)
+            if previous is None or bucket < previous:
+                # Establish a baseline or quietly re-arm after that window resets.
+                self.last_alert_buckets[key] = bucket
+                continue
+            if bucket > previous:
+                self.last_alert_buckets[key] = bucket
+                display_value = self._display_value(used_percent)
+                if display_value is not None:
+                    alerts.append(f"{label} {display_value:.0f}% {self._display_label()}")
+        if alerts:
+            self.tray_popup.show("  ·  ".join(alerts))
             if self.settings.sound_alert:
                 self._play_sound_alert()
 
@@ -1997,7 +2097,9 @@ class UsageApp:
             tags="stats-selection",
         )
         used = selected.get("used_percent")
+        five_hour_used = selected.get("five_hour_used_percent")
         rate = selected.get("rate_per_hour")
+        five_hour_rate = selected.get("five_hour_rate_per_hour")
         token_rate = selected.get("token_rate_per_minute")
         if used is not None:
             usage_y = self.stats_usage_bottom - (used / 100) * (self.stats_usage_bottom - self.stats_usage_top)
@@ -2006,7 +2108,7 @@ class UsageApp:
                 usage_y - 5,
                 x + 5,
                 usage_y + 5,
-                fill=COLORS["mint"],
+                fill=COLORS["violet"],
                 outline=COLORS["ink"],
                 width=2,
                 tags="stats-selection",
@@ -2033,19 +2135,46 @@ class UsageApp:
                 token_y - 5,
                 x + 5,
                 token_y + 5,
+                fill=COLORS["mint"],
+                outline=COLORS["ink"],
+                width=2,
+                tags="stats-selection",
+            )
+        if five_hour_rate is not None:
+            plotted_five_hour_rate = clamp(five_hour_rate, 0, self.stats_rate_scale)
+            five_hour_rate_y = self.stats_rate_top + ((self.stats_rate_scale - plotted_five_hour_rate) / self.stats_rate_scale) * (self.stats_rate_bottom - self.stats_rate_top)
+            canvas.create_oval(
+                x - 5,
+                five_hour_rate_y - 5,
+                x + 5,
+                five_hour_rate_y + 5,
                 fill=COLORS["coral"],
+                outline=COLORS["ink"],
+                width=2,
+                tags="stats-selection",
+            )
+        if five_hour_used is not None:
+            five_hour_y = self.stats_usage_bottom - (five_hour_used / 100) * (self.stats_usage_bottom - self.stats_usage_top)
+            canvas.create_oval(
+                x - 5,
+                five_hour_y - 5,
+                x + 5,
+                five_hour_y + 5,
+                fill=COLORS["cyan"],
                 outline=COLORS["ink"],
                 width=2,
                 tags="stats-selection",
             )
         local = datetime.fromtimestamp(selected["timestamp"]).astimezone()
         when = f"{local.strftime('%b %d')} {local.strftime('%I:%M %p').lstrip('0')}"
-        usage_text = f"usage {used:.1f}%" if used is not None else "usage n/a"
-        rate_text = f"rate {rate:+.2f} pts/hr" if rate is not None else "rate collecting"
+        weekly_text = f"week {used:.1f}%" if used is not None else "week n/a"
+        five_hour_text = f"5h {five_hour_used:.1f}%" if five_hour_used is not None else "5h n/a"
+        rate_text = f"week pace {rate:+.2f} pts/hr" if rate is not None else "week pace collecting"
+        five_hour_rate_text = f"5h pace {five_hour_rate:+.2f} pts/hr" if five_hour_rate is not None else "5h pace collecting"
         token_text = f"tokens {format_token_count(selected.get('total_tokens'))}"
         token_rate_text = f"pace {format_token_rate(token_rate)}"
         if self.stats_readout is not None:
-            self.stats_readout.configure(text=f"{when}  |  {usage_text}  |  {rate_text}  |  {token_text}  |  {token_rate_text}")
+            self.stats_readout.configure(text=f"{when}  |  {five_hour_text}  |  {weekly_text}  |  {five_hour_rate_text}  |  {rate_text}  |  {token_text}  |  {token_rate_text}")
 
     def _render_statistics_legacy(self) -> None:
         canvas = self.stats_canvas
@@ -2135,18 +2264,35 @@ class UsageApp:
 
         usage_points = self.history.chart_points(self.stats_period_hours)
         rate_points = self.history.rate_series(self.stats_period_hours, usage_points)
+        five_hour_rate_points = self.history.rate_series(
+            self.stats_period_hours,
+            usage_points,
+            value_field="five_hour_used_percent",
+        )
         token_rate_points = self.history.token_rate_series(self.stats_period_hours, usage_points)
         current = usage_points[-1]["used_percent"] if usage_points else self.snapshot.used_percent
+        five_hour_points = [point for point in usage_points if number(point.get("five_hour_used_percent")) is not None]
+        five_hour_current = five_hour_points[-1]["five_hour_used_percent"] if five_hour_points else self.snapshot.five_hour_used_percent
         remaining = 100 - current if current is not None else None
+        five_hour_remaining = 100 - five_hour_current if five_hour_current is not None else None
         current_rate = None
         if usage_points and rate_points and abs(rate_points[-1]["timestamp"] - usage_points[-1]["timestamp"]) <= 1:
             current_rate = rate_points[-1]["rate_per_hour"]
+        five_hour_current_rate = None
+        if five_hour_points and five_hour_rate_points and abs(five_hour_rate_points[-1]["timestamp"] - five_hour_points[-1]["timestamp"]) <= 1:
+            five_hour_current_rate = five_hour_rate_points[-1]["rate_per_hour"]
         current_token_rate = self._current_token_rate() if not self.snapshot.is_stale else None
         current_tokens = self.snapshot.total_tokens
         if current_tokens is None:
             token_points = [point for point in usage_points if number(point.get("total_tokens")) is not None]
             current_tokens = token_points[-1]["total_tokens"] if token_points else None
         tokens_per_point = self.history.token_efficiency(self.stats_period_hours, usage_points)
+        five_hour_tokens_per_point = self.history.token_efficiency(
+            self.stats_period_hours,
+            usage_points,
+            value_field="five_hour_used_percent",
+            resets_field="five_hour_resets_at",
+        )
 
         def rate_text(value: Optional[float]) -> str:
             return self._format_rate(value)
@@ -2158,21 +2304,31 @@ class UsageApp:
             return f"{local.strftime('%b %d')} {local.strftime('%I %p').lstrip('0')}"
 
         usage_cards = [
-            ("USED NOW", f"{current:.0f}%" if current is not None else "--", COLORS["violet"]),
-            ("REMAINING", f"{remaining:.0f}%" if remaining is not None else "--", COLORS["mint"]),
-            ("RATE NOW", rate_text(current_rate), COLORS["amber"]),
-            ("ETA", self._format_eta(current, current_rate, self.snapshot.resets_at), COLORS["mint"]),
+            ("5-HOUR USED", f"{five_hour_current:.0f}%" if five_hour_current is not None else "--", COLORS["cyan"]),
+            ("5-HOUR REMAINING", f"{five_hour_remaining:.0f}%" if five_hour_remaining is not None else "--", COLORS["mint"]),
+            ("WEEKLY USED", f"{current:.0f}%" if current is not None else "--", COLORS["violet"]),
+            ("WEEKLY REMAINING", f"{remaining:.0f}%" if remaining is not None else "--", COLORS["mint"]),
+        ]
+        pace_cards = [
+            ("5-HOUR RATE", rate_text(five_hour_current_rate), COLORS["coral"]),
+            ("5-HOUR ETA", self._format_eta(five_hour_current, five_hour_current_rate, self.snapshot.five_hour_resets_at), COLORS["mint"]),
+            ("WEEKLY RATE", rate_text(current_rate), COLORS["amber"]),
+            ("WEEKLY ETA", self._format_eta(current, current_rate, self.snapshot.resets_at), COLORS["mint"]),
         ]
         token_cards = [
             ("CURRENT TASK TOKENS", format_token_count(current_tokens), COLORS["cyan"]),
             ("LAST RESPONSE", format_token_count(self.snapshot.last_tokens), COLORS["soft"]),
             ("TOKEN PACE", format_token_rate(current_token_rate), COLORS["coral"]),
-            ("OBSERVED TOKENS / 1%", format_token_count(tokens_per_point), COLORS["amber"]),
+            (
+                "TOKENS / 1%  5H · WEEK",
+                f"{format_token_count(five_hour_tokens_per_point)} · {format_token_count(tokens_per_point)}",
+                COLORS["amber"],
+            ),
         ]
         card_margin = 14
         card_gap = 10
         card_width = (canvas_width - card_margin * 2 - card_gap * 3) / 4
-        for row_index, cards in enumerate((usage_cards, token_cards)):
+        for row_index, cards in enumerate((usage_cards, pace_cards, token_cards)):
             y1 = 14 + row_index * 70
             y2 = y1 + 62
             for index, (label, value, color) in enumerate(cards):
@@ -2193,13 +2349,24 @@ class UsageApp:
         plot_by_timestamp: dict[float, dict[str, Any]] = {}
         for point in usage_points:
             plot_point = {"timestamp": point["timestamp"], "used_percent": point["used_percent"]}
-            for field in ("total_tokens", "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens"):
+            for field in (
+                "five_hour_used_percent",
+                "total_tokens",
+                "input_tokens",
+                "cached_input_tokens",
+                "output_tokens",
+                "reasoning_tokens",
+            ):
                 if field in point:
                     plot_point[field] = point[field]
             plot_by_timestamp.setdefault(point["timestamp"], {}).update(plot_point)
         for point in rate_points:
             plot_by_timestamp.setdefault(point["timestamp"], {}).update(
                 {"timestamp": point["timestamp"], "rate_per_hour": point["rate_per_hour"]}
+            )
+        for point in five_hour_rate_points:
+            plot_by_timestamp.setdefault(point["timestamp"], {}).update(
+                {"timestamp": point["timestamp"], "five_hour_rate_per_hour": point["rate_per_hour"]}
             )
         for point in token_rate_points:
             plot_by_timestamp.setdefault(point["timestamp"], {}).update(
@@ -2242,16 +2409,16 @@ class UsageApp:
             if len(coordinates) >= 4:
                 canvas.create_line(*coordinates, fill=color, width=3)
 
-        canvas.create_text(18, 164, text="USAGE + RATE + TOKEN ACTIVITY", anchor="w", fill=COLORS["soft"], font=("Segoe UI", 8, "bold"))
-        canvas.create_text(canvas_width - 18, 164, text="usage % left | rate pts/hr right | tokens/min lower", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+        canvas.create_text(18, 234, text="5H + WEEKLY USAGE, RATE + TOKEN ACTIVITY", anchor="w", fill=COLORS["soft"], font=("Segoe UI", 8, "bold"))
+        canvas.create_text(canvas_width - 18, 234, text="5h cyan · week violet · 5h rate coral · week rate amber · tokens lower", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         scope_label = {1: "1 HOUR", 24 * 4: "4 DAYS", 24 * 7: "7 DAYS", 24 * 30: "30 DAYS"}.get(
             self.stats_period_hours,
             f"{self.stats_period_hours} HOURS",
         )
-        canvas.create_text(18, 179, text=f"LAST {scope_label}", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8))
-        canvas.create_text(canvas_width - 18, 179, text="token efficiency is observed, not a fixed conversion", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+        canvas.create_text(18, 249, text=f"LAST {scope_label}", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8))
+        canvas.create_text(canvas_width - 18, 249, text="5-hour history begins when Codex reports it; no backfilled values", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
 
-        plot_top, full_plot_bottom = 196, max(430, canvas_height - 34)
+        plot_top, full_plot_bottom = 266, max(500, canvas_height - 34)
         token_height = max(88, (full_plot_bottom - plot_top) * 0.25)
         token_top = full_plot_bottom - token_height
         usage_bottom = token_top - 30
@@ -2279,11 +2446,28 @@ class UsageApp:
             if len(coordinates) >= 4:
                 canvas.create_line(*coordinates, fill=COLORS["violet"], width=3)
             latest_x, latest_y = coordinates[-2:]
-            canvas.create_oval(latest_x - 5, latest_y - 5, latest_x + 5, latest_y + 5, fill=COLORS["mint"], outline=COLORS["ink"], width=2)
-        else:
+            canvas.create_oval(latest_x - 5, latest_y - 5, latest_x + 5, latest_y + 5, fill=COLORS["violet"], outline=COLORS["ink"], width=2)
+        if five_hour_points:
+            five_hour_coordinates: list[float] = []
+            for point in five_hour_points:
+                five_hour_coordinates.extend(
+                    (
+                        x_for(point["timestamp"]),
+                        usage_bottom - (point["five_hour_used_percent"] / 100) * (usage_bottom - plot_top),
+                    )
+                )
+            if len(five_hour_coordinates) >= 4:
+                canvas.create_line(*five_hour_coordinates, fill=COLORS["cyan"], width=3)
+            five_hour_x, five_hour_y = five_hour_coordinates[-2:]
+            canvas.create_oval(five_hour_x - 5, five_hour_y - 5, five_hour_x + 5, five_hour_y + 5, fill=COLORS["cyan"], outline=COLORS["ink"], width=2)
+        if not usage_points and not five_hour_points:
             canvas.create_text((left + right) / 2, (plot_top + usage_bottom) / 2, text="Keep the counter running to build this graph.", fill=COLORS["muted"], font=("Segoe UI", 10))
 
-        rate_values = sorted(abs(point["rate_per_hour"]) for point in rate_points if math.isfinite(point["rate_per_hour"]))
+        rate_values = sorted(
+            abs(point["rate_per_hour"])
+            for point in [*rate_points, *five_hour_rate_points]
+            if math.isfinite(point["rate_per_hour"])
+        )
         if rate_values:
             observed_max = max(rate_values)
             rate_scale = max(20.0, math.ceil(observed_max / 20.0) * 20.0)
@@ -2304,7 +2488,15 @@ class UsageApp:
                 * (usage_bottom - plot_top),
                 COLORS["amber"],
             )
-        else:
+        if five_hour_rate_points:
+            draw_recorded_segments(
+                five_hour_rate_points,
+                lambda point: plot_top
+                + ((rate_scale - clamp(point["rate_per_hour"], 0, rate_scale)) / rate_scale)
+                * (usage_bottom - plot_top),
+                COLORS["coral"],
+            )
+        if not rate_points and not five_hour_rate_points:
             canvas.create_text((left + right) / 2, (plot_top + usage_bottom) / 2, text="More samples are needed to estimate a trend rate.", fill=COLORS["muted"], font=("Segoe UI", 10))
 
         canvas.create_text(left, token_top - 10, text="TOKEN ACTIVITY", anchor="w", fill=COLORS["coral"], font=("Segoe UI", 8, "bold"))
@@ -2326,7 +2518,7 @@ class UsageApp:
                 y = token_top + (
                     (token_scale - clamp(point["token_rate_per_minute"], 0, token_scale)) / token_scale
                 ) * (token_bottom - token_top)
-                canvas.create_line(x, token_bottom, x, y, fill=COLORS["coral"], width=bar_width)
+                canvas.create_line(x, token_bottom, x, y, fill=COLORS["mint"], width=bar_width)
         else:
             canvas.create_text((left + right) / 2, (token_top + token_bottom) / 2, text="Token activity appears after two current-task samples.", fill=COLORS["muted"], font=("Segoe UI", 9))
 
@@ -2543,8 +2735,14 @@ class UsageApp:
             self.settings.refresh_interval_seconds = next(
                 seconds for seconds, label in refresh_options.items() if label == refresh_var.get()
             )
-            if self.snapshot.used_percent is not None:
-                self.last_alert_bucket = int(self.snapshot.used_percent // self.settings.milestone_step)
+            self.last_alert_buckets = {
+                key: int(value // self.settings.milestone_step)
+                for key, value in (
+                    ("5-hour", self.snapshot.five_hour_used_percent),
+                    ("weekly", self.snapshot.used_percent),
+                )
+                if value is not None
+            }
             self.settings.save()
             self.root.attributes("-topmost", self.settings.always_on_top)
             if self.refresh_after_id:
