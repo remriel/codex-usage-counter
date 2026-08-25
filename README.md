@@ -1,6 +1,6 @@
 # Codex Usage Counter
 
-A small Windows desktop counter that keeps your current Codex usage visible without opening a dashboard.
+A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, reset countdowns, and token activity.
 
 [Download the latest Windows release](../../releases/latest)
 
@@ -30,11 +30,11 @@ The executable is self-contained and does not require Python to be installed.
 
 ### Counter window
 
-![Codex Usage Counter window with live rate and ETA](screenshots/counter.png)
+![Codex Usage Counter showing separate 5-hour and weekly allowance cards, rates, ETAs, and token activity](screenshots/counter.png)
 
 ### Statistics view
 
-![Codex Usage Counter seven-day usage and rate statistics](screenshots/statistics.png)
+![Codex Usage Counter Statistics showing 5-hour and weekly usage/rate lines with token activity](screenshots/statistics.png)
 
 ## How the data is read
 
