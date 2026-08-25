@@ -7,13 +7,15 @@ A small Windows desktop counter that keeps your current Codex usage visible with
 ## What it does
 
 - Shows the latest local Codex rate-limit percentage, reset countdown, and signal state.
+- Tracks current-task input, cached-input, output, reasoning, total, and last-response token counts from local Codex aggregate telemetry.
+- Refreshes within about a second when an already-discovered active Codex session file changes; configurable polling remains the fallback.
 - Displays the current number directly in the notification-area tray icon, so it is readable without hovering.
 - Shows a custom in-app tray milestone popup above the Windows notification area; it does not use Windows toast or balloon notifications.
 - Polls local usage every two minutes by default; every automatic read refreshes usage, rate, and ETA together, while **Refresh now** reads immediately outside that schedule.
 - Supports Used or Remaining display mode, always-on-top behavior, optional Start with Windows behavior, optional custom milestone chime, configurable polling, trigger percentage, and popup duration.
 - Keeps minute-level usage history with 1-hour, 3-hour, 12-hour, 24-hour, 48-hour, 4-day, 7-day, and 30-day overlapping usage/rate graphs; Statistics opens to the 1-hour view by default.
 - Opens Statistics as a fullscreen view with a responsive, edge-to-edge chart canvas.
-- Provides click-and-drag point inspection, smoothed rate trends, ETA, reset-aware regression, and time-series statistics.
+- Provides click-and-drag point inspection, smoothed percentage-rate trends, token activity, observed tokens per allowance point, ETA, reset-aware regression, and time-series statistics.
 
 ## Quick start on Windows
 
@@ -36,13 +38,13 @@ The executable is self-contained and does not require Python to be installed.
 
 ## How the data is read
 
-The counter reads the latest `rate_limits` event from JSONL files under:
+The counter reads aggregate `rate_limits` and `token_count` events from JSONL files under:
 
 ```text
 %USERPROFILE%\.codex\sessions
 ```
 
-It does not read `auth.json`, API keys, cookies, browser profiles, or conversation content. The usage dashboard link opens the official dashboard for the authoritative view. Because the counter is based on local session telemetry, it can show a stale signal until a newer Codex event is written; **Refresh now** forces an immediate local read.
+It does not read `auth.json`, API keys, cookies, browser profiles, or conversation content. Token totals are scoped to the currently active local Codex task. The token-to-percentage statistic is an observed relationship, not a fixed conversion: model behavior, caching, reasoning, concurrent tasks, and delayed allowance reporting can change it. The usage dashboard link opens the official dashboard for the authoritative view. Because the counter is based on local session telemetry, it can show a stale signal until a newer Codex event is written; **Refresh now** forces an immediate local read.
 
 Closing the window hides it to the tray. Use the tray menu’s **Quit** command to exit.
 
