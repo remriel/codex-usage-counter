@@ -14,8 +14,10 @@ A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, rese
 - Polls local usage every two minutes by default; every automatic read refreshes usage, rate, and ETA together, while **Refresh now** reads immediately outside that schedule.
 - Supports Used or Remaining display mode, always-on-top behavior, optional Start with Windows behavior, optional custom milestone chime, configurable polling, trigger percentage, and popup duration.
 - Keeps minute-level usage history with 1-hour, 3-hour, 12-hour, 24-hour, 48-hour, 4-day, 7-day, and 30-day overlapping usage/rate graphs; Statistics opens to the 1-hour view by default.
+- Adds a stock-chart-style **Daily** interval with one bar per local calendar day, reset-aware daily 5-hour and weekly totals, daily average/peak rates, and daily token totals.
 - Opens Statistics as a fullscreen view with a responsive, edge-to-edge chart canvas.
-- Provides click-and-drag point inspection, separate 5-hour and weekly usage/rate lines, token activity, observed tokens per allowance point, ETA, reset-aware regression, and time-series statistics.
+- Keeps matching 5-hour and weekly cards side by side and updates those cards when a minute or daily point is clicked, dragged across, or selected with the mouse wheel.
+- Provides separate 5-hour and weekly usage/rate lines, token activity, observed tokens per allowance point, ETA, reset-aware regression, and time-series statistics.
 
 ## Quick start on Windows
 

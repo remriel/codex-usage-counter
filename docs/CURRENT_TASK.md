@@ -2,7 +2,7 @@
 
 ## Objective
 
-Track the restored 5-hour Codex allowance alongside the weekly allowance, package the corrected app, and remove previous local versions without deleting settings/history or source.
+Add a stock-chart-style daily Statistics interval and place every matching 5-hour/weekly statistic side by side.
 
 ## Current state
 
@@ -14,6 +14,9 @@ Track the restored 5-hour Codex allowance alongside the weekly allowance, packag
 - Fresh README screenshots were captured from the current dual-window UI and Statistics view.
 - The current install is the unversioned `outputs\CodexUsageCounter\CodexUsageCounter.exe`; Start with Windows targets it.
 - The prior v1.1.15 executable/archive and four stale versioned README files were removed. Settings and history were preserved.
+- Statistics now includes a Daily interval with one bar per local calendar day across the retained 30-day history.
+- Daily cards show reset-aware total usage, average level, average/peak rate, token totals/pacing, and recorded sample span for the selected day.
+- Matching 5-hour and weekly Used, Remaining, Rate, and ETA cards are adjacent in the regular Statistics views; daily pairs use the same layout.
 
 ## Decisions
 
@@ -27,6 +30,8 @@ Track the restored 5-hour Codex allowance alongside the weekly allowance, packag
 - Show the most constrained window in the numeric tray icon and both windows in the tooltip/main screen.
 - Preserve previous weekly history and leave pre-feature 5-hour history missing rather than inventing values.
 - Keep the Statistics cards as the primary selection readout: clicking or dragging the chart updates all card values to the selected timestamp.
+- Treat Daily as an interval, like a trading chart: one calendar day per bar, with missing days left blank rather than fabricated.
+- Sum positive allowance changes across reset boundaries for daily totals; display sampled daily averages separately.
 
 ## Relevant files
 
@@ -54,7 +59,10 @@ Track the restored 5-hour Codex allowance alongside the weekly allowance, packag
 - Selection interaction test passed: all 12 Statistics card values changed to a historical point and the readout now only identifies the selected timestamp.
 - The final executable was rebuilt after the selection and mouse-wheel changes, installed over the unversioned launcher, and relaunched successfully; build and installed SHA-256 hashes match.
 - The stale unversioned `dist\CodexUsageCounter-source.zip` archive was moved to the Recycle Bin; settings, history, source, and the current executable were preserved.
+- A synthetic reset fixture produced 10 weekly points, 19 five-hour points, an 8.25% weekly average, and 400 daily tokens exactly as expected.
+- Tk render checks passed for 25 retained daily bars, all 12 daily cards, selected-day card updates, and paired 5-hour/weekly card ordering in both daily and minute-level views.
+- The PyInstaller build completed successfully; the installed executable SHA-256 matches the build and the normal two-process packaged app is running.
 
 ## Next steps
 
-1. Commit the Statistics card-selection update and sync the source branch to GitHub.
+1. No implementation work remains. Create a new numbered downloadable release only when explicitly requested.

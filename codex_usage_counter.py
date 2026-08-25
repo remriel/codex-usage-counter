@@ -13,7 +13,7 @@ import threading
 import time
 import webbrowser
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from collections import deque
 from pathlib import Path
 from typing import Any, Optional
@@ -261,6 +261,8 @@ class UsageHistory:
     def __init__(self) -> None:
         self.points: list[dict[str, Any]] = self._load()
         self._last_saved_at = 0.0
+        self._daily_cache_key: Optional[tuple[Any, ...]] = None
+        self._daily_cache: list[dict[str, Any]] = []
 
     @staticmethod
     def _point(item: Any) -> Optional[dict[str, Any]]:
@@ -451,6 +453,8 @@ class UsageHistory:
             return
         cutoff = now - HISTORY_RETENTION_DAYS * 24 * 60 * 60
         self.points = [item for item in updated_points if item["timestamp"] >= cutoff][-HISTORY_MAX_POINTS:]
+        self._daily_cache_key = None
+        self._daily_cache = []
         self.save(force=started_new_bucket)
 
     def save(self, force: bool = False) -> None:
@@ -481,6 +485,155 @@ class UsageHistory:
         """Return the minute-level series used by every statistics range."""
 
         return self._sanitize(self.since(hours))
+
+    def daily_statistics(self, days: int = HISTORY_RETENTION_DAYS) -> list[dict[str, Any]]:
+        """Aggregate retained samples into stock-chart-style local calendar days."""
+
+        days = max(1, int(days))
+        now_local = datetime.now().astimezone()
+        latest = self.points[-1] if self.points else {}
+        cache_key = (
+            days,
+            now_local.date().isoformat(),
+            len(self.points),
+            latest.get("timestamp"),
+            latest.get("used_percent"),
+            latest.get("five_hour_used_percent"),
+            latest.get("resets_at"),
+            latest.get("five_hour_resets_at"),
+            latest.get("total_tokens"),
+            latest.get("session_id"),
+        )
+        if getattr(self, "_daily_cache_key", None) == cache_key:
+            return self._daily_cache
+        today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        range_start = today_start - timedelta(days=days - 1)
+        range_start_epoch = range_start.timestamp()
+        all_points = self._sanitize(self.points)
+        points = [point for point in all_points if point["timestamp"] >= range_start_epoch]
+        if not points:
+            self._daily_cache_key = cache_key
+            self._daily_cache = []
+            return []
+
+        def day_start_for(timestamp: float) -> float:
+            local = datetime.fromtimestamp(timestamp).astimezone()
+            return local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+        buckets: dict[float, list[dict[str, Any]]] = {}
+        for point in points:
+            buckets.setdefault(day_start_for(point["timestamp"]), []).append(point)
+
+        def mean(values: list[float]) -> Optional[float]:
+            return sum(values) / len(values) if values else None
+
+        def bucket_values(
+            series: list[dict[str, Any]],
+            field: str,
+        ) -> dict[float, list[float]]:
+            result: dict[float, list[float]] = {}
+            for item in series:
+                value = number(item.get(field))
+                if value is None or item["timestamp"] < range_start_epoch:
+                    continue
+                result.setdefault(day_start_for(item["timestamp"]), []).append(value)
+            return result
+
+        usage_totals: dict[str, dict[float, float]] = {
+            "used_percent": {},
+            "five_hour_used_percent": {},
+        }
+        for value_field, resets_field in (
+            ("used_percent", "resets_at"),
+            ("five_hour_used_percent", "five_hour_resets_at"),
+        ):
+            previous: Optional[dict[str, Any]] = None
+            for point in all_points:
+                current_value = number(point.get(value_field))
+                if current_value is None:
+                    continue
+                day_start = day_start_for(point["timestamp"])
+                delta = 0.0
+                if previous is not None:
+                    previous_value = number(previous.get(value_field))
+                    previous_reset = number(previous.get(resets_field))
+                    current_reset = number(point.get(resets_field))
+                    reset_changed = (
+                        previous_reset is not None
+                        and current_reset is not None
+                        and abs(current_reset - previous_reset) > RESET_TIME_TOLERANCE_SECONDS
+                    )
+                    if reset_changed:
+                        delta = current_value
+                    elif previous_value is not None and current_value >= previous_value:
+                        delta = current_value - previous_value
+                if day_start >= range_start_epoch and delta > 0:
+                    daily_totals = usage_totals[value_field]
+                    daily_totals[day_start] = daily_totals.get(day_start, 0.0) + delta
+                previous = point
+
+        hours = days * 24 + 24
+        weekly_rates = bucket_values(self.rate_series(hours, all_points), "rate_per_hour")
+        five_hour_rates = bucket_values(
+            self.rate_series(hours, all_points, value_field="five_hour_used_percent"),
+            "rate_per_hour",
+        )
+        token_rates = bucket_values(self.token_rate_series(hours, all_points), "token_rate_per_minute")
+
+        token_totals: dict[float, float] = {}
+        previous_tokens_by_session: dict[str, float] = {}
+        for point in all_points:
+            session_id = point.get("session_id")
+            token_total = number(point.get("total_tokens"))
+            if not isinstance(session_id, str) or not session_id or token_total is None:
+                continue
+            previous_total = previous_tokens_by_session.get(session_id)
+            delta = token_total if previous_total is None else max(0.0, token_total - previous_total)
+            day_start = day_start_for(point["timestamp"])
+            if day_start >= range_start_epoch and delta > 0:
+                token_totals[day_start] = token_totals.get(day_start, 0.0) + delta
+            previous_tokens_by_session[session_id] = token_total
+
+        daily_points: list[dict[str, Any]] = []
+        for day_start in sorted(buckets):
+            day_points = buckets[day_start]
+            day_local = datetime.fromtimestamp(day_start).astimezone()
+            next_day_start = (day_local + timedelta(days=1)).timestamp()
+            weekly_levels = [float(point["used_percent"]) for point in day_points]
+            five_hour_levels = [
+                float(point["five_hour_used_percent"])
+                for point in day_points
+                if number(point.get("five_hour_used_percent")) is not None
+            ]
+            weekly_rate_values = weekly_rates.get(day_start, [])
+            five_hour_rate_values = five_hour_rates.get(day_start, [])
+            token_rate_values = token_rates.get(day_start, [])
+            point: dict[str, Any] = {
+                "timestamp": day_start + (next_day_start - day_start) / 2,
+                "day_start": day_start,
+                "daily": True,
+                "used_percent": usage_totals["used_percent"].get(day_start, 0.0),
+                "five_hour_used_percent": usage_totals["five_hour_used_percent"].get(day_start, 0.0),
+                "daily_weekly_average": mean(weekly_levels),
+                "daily_five_hour_average": mean(five_hour_levels),
+                "rate_per_hour": mean(weekly_rate_values),
+                "five_hour_rate_per_hour": mean(five_hour_rate_values),
+                "daily_weekly_peak_rate": max(weekly_rate_values) if weekly_rate_values else None,
+                "daily_five_hour_peak_rate": max(five_hour_rate_values) if five_hour_rate_values else None,
+                "daily_total_tokens": token_totals.get(day_start, 0.0),
+                "total_tokens": token_totals.get(day_start, 0.0),
+                "token_rate_per_minute": mean(token_rate_values),
+                "daily_peak_token_rate": max(token_rate_values) if token_rate_values else None,
+                "daily_samples": len(day_points),
+                "daily_span_seconds": max(0.0, day_points[-1]["timestamp"] - day_points[0]["timestamp"]),
+            }
+            last_tokens = number(day_points[-1].get("last_tokens"))
+            if last_tokens is not None:
+                point["last_tokens"] = last_tokens
+            daily_points.append(point)
+        self._daily_cache_key = cache_key
+        self._daily_cache = daily_points
+        return daily_points
 
     @staticmethod
     def _slope(points: list[dict[str, Any]]) -> Optional[float]:
@@ -1415,10 +1568,12 @@ class UsageApp:
         self.stats_canvas: Optional[tk.Canvas] = None
         self.stats_canvas_size = (0, 0)
         self.stats_readout: Optional[tk.Label] = None
+        self.stats_card_label_items: list[int] = []
         self.stats_card_value_items: list[int] = []
         self.stats_live_card_data: dict[str, Any] = {}
         self.stats_usage_points: list[dict[str, Any]] = []
         self.stats_period_hours = 1
+        self.stats_daily_view = False
         self.stats_plot_points: list[dict[str, Any]] = []
         self.stats_plot_start = 0.0
         self.stats_plot_end = 0.0
@@ -1429,6 +1584,7 @@ class UsageApp:
         self.stats_rate_top = 343
         self.stats_rate_bottom = 508
         self.stats_rate_scale = 1.0
+        self.stats_usage_scale = 100.0
         self.stats_token_top = 0
         self.stats_token_bottom = 0
         self.stats_token_scale = 1.0
@@ -1923,6 +2079,7 @@ class UsageApp:
                 pass
 
         self.stats_period_hours = 1
+        self.stats_daily_view = False
         dialog = tk.Toplevel(self.root)
         self.stats_window = dialog
         dialog.title("Codex Usage Statistics")
@@ -1997,7 +2154,10 @@ class UsageApp:
             side="left", padx=(0, 5), ipadx=7, ipady=3
         )
         tk.Button(period_buttons, text="30 days", command=lambda: self.set_stats_period(24 * 30), **button_style).pack(
-            side="left", padx=(5, 0), ipadx=7, ipady=3
+            side="left", padx=(0, 5), ipadx=7, ipady=3
+        )
+        tk.Button(period_buttons, text="Daily", command=self.set_stats_daily, **button_style).pack(
+            side="left", padx=(0, 0), ipadx=7, ipady=3
         )
 
         self.stats_readout = tk.Label(
@@ -2049,6 +2209,13 @@ class UsageApp:
 
     def set_stats_period(self, hours: int) -> None:
         self.stats_period_hours = hours
+        self.stats_daily_view = False
+        self.stats_selected_timestamp = None
+        self._render_statistics()
+
+    def set_stats_daily(self) -> None:
+        self.stats_period_hours = HISTORY_RETENTION_DAYS * 24
+        self.stats_daily_view = True
         self.stats_selected_timestamp = None
         self._render_statistics()
 
@@ -2062,6 +2229,7 @@ class UsageApp:
         self.stats_canvas = None
         self.stats_canvas_size = (0, 0)
         self.stats_readout = None
+        self.stats_card_label_items = []
         self.stats_card_value_items = []
         self.stats_live_card_data = {}
         self.stats_usage_points = []
@@ -2098,9 +2266,57 @@ class UsageApp:
     def _update_statistics_cards(self, point: Optional[dict[str, Any]]) -> None:
         """Make the visible cards describe the selected chart point, or live data."""
 
-        if not self.stats_card_value_items:
+        if not self.stats_card_value_items or self.stats_canvas is None:
             return
         data = point if point is not None else self.stats_live_card_data
+        if self.stats_daily_view and data.get("daily"):
+            def points_text(value: Optional[float]) -> str:
+                return f"{value:.1f} pts" if value is not None and math.isfinite(value) else "--"
+
+            def level_text(value: Optional[float]) -> str:
+                return f"{value:.1f}%" if value is not None and math.isfinite(value) else "--"
+
+            sample_count = number(data.get("daily_samples"))
+            span_seconds = number(data.get("daily_span_seconds"))
+            span_text = "--"
+            if span_seconds is not None:
+                span_minutes = max(0, int(span_seconds // 60))
+                span_text = f"{span_minutes // 60}h {span_minutes % 60:02d}m"
+            samples_text = f"{int(sample_count)} · {span_text}" if sample_count is not None else span_text
+            labels = [
+                "5H TOTAL USED",
+                "WEEK TOTAL USED",
+                "5H AVG LEVEL",
+                "WEEK AVG LEVEL",
+                "5H AVG RATE",
+                "WEEK AVG RATE",
+                "5H PEAK RATE",
+                "WEEK PEAK RATE",
+                "TOTAL TOKENS",
+                "AVG TOKEN PACE",
+                "PEAK TOKEN PACE",
+                "SAMPLES · RECORDED SPAN",
+            ]
+            values = [
+                points_text(number(data.get("five_hour_used_percent"))),
+                points_text(number(data.get("used_percent"))),
+                level_text(number(data.get("daily_five_hour_average"))),
+                level_text(number(data.get("daily_weekly_average"))),
+                self._format_rate(number(data.get("five_hour_rate_per_hour"))),
+                self._format_rate(number(data.get("rate_per_hour"))),
+                self._format_rate(number(data.get("daily_five_hour_peak_rate"))),
+                self._format_rate(number(data.get("daily_weekly_peak_rate"))),
+                format_token_count(number(data.get("daily_total_tokens"))),
+                format_token_rate(number(data.get("token_rate_per_minute"))),
+                format_token_rate(number(data.get("daily_peak_token_rate"))),
+                samples_text,
+            ]
+            for item_id, label in zip(self.stats_card_label_items, labels):
+                self.stats_canvas.itemconfigure(item_id, text=label)
+            for item_id, value in zip(self.stats_card_value_items, values):
+                self.stats_canvas.itemconfigure(item_id, text=value)
+            return
+
         five_hour_used = number(data.get("five_hour_used_percent"))
         weekly_used = number(data.get("used_percent"))
         five_hour_rate = number(data.get("five_hour_rate_per_hour"))
@@ -2129,20 +2345,36 @@ class UsageApp:
         def percent_text(value: Optional[float]) -> str:
             return f"{value:.0f}%" if value is not None and math.isfinite(value) else "--"
 
+        labels = [
+            "5-HOUR USED",
+            "WEEKLY USED",
+            "5-HOUR REMAINING",
+            "WEEKLY REMAINING",
+            "5-HOUR RATE",
+            "WEEKLY RATE",
+            "5-HOUR ETA",
+            "WEEKLY ETA",
+            "CURRENT TASK TOKENS",
+            "LAST RESPONSE",
+            "TOKEN PACE",
+            "TOKENS / 1%  5H · WEEK",
+        ]
         values = [
             percent_text(five_hour_used),
-            percent_text(100 - five_hour_used if five_hour_used is not None else None),
             percent_text(weekly_used),
+            percent_text(100 - five_hour_used if five_hour_used is not None else None),
             percent_text(100 - weekly_used if weekly_used is not None else None),
             self._format_rate(five_hour_rate),
-            self._format_eta(five_hour_used, five_hour_rate, five_hour_reset),
             self._format_rate(weekly_rate),
+            self._format_eta(five_hour_used, five_hour_rate, five_hour_reset),
             self._format_eta(weekly_used, weekly_rate, weekly_reset),
             format_token_count(total_tokens),
             format_token_count(last_tokens),
             format_token_rate(token_rate),
             f"{format_token_count(five_hour_tokens_per_point)} · {format_token_count(weekly_tokens_per_point)}",
         ]
+        for item_id, label in zip(self.stats_card_label_items, labels):
+            self.stats_canvas.itemconfigure(item_id, text=label)
         for item_id, value in zip(self.stats_card_value_items, values):
             self.stats_canvas.itemconfigure(item_id, text=value)
 
@@ -2154,7 +2386,10 @@ class UsageApp:
         if self.stats_selected_timestamp is None or not self.stats_plot_points:
             self._update_statistics_cards(None)
             if self.stats_readout is not None:
-                self.stats_readout.configure(text="LIVE VALUES  ·  click or drag across the plot to inspect a point")
+                if self.stats_daily_view:
+                    self.stats_readout.configure(text="LATEST RECORDED DAY  ·  click, drag, or scroll through daily bars")
+                else:
+                    self.stats_readout.configure(text="LIVE VALUES  ·  click or drag across the plot to inspect a point")
             return
         selected = min(
             self.stats_plot_points,
@@ -2177,6 +2412,65 @@ class UsageApp:
         rate = selected.get("rate_per_hour")
         five_hour_rate = selected.get("five_hour_rate_per_hour")
         token_rate = selected.get("token_rate_per_minute")
+        if self.stats_daily_view:
+            for value, color in ((used, COLORS["violet"]), (five_hour_used, COLORS["cyan"])):
+                plotted_value = number(value)
+                if plotted_value is None or self.stats_usage_scale <= 0:
+                    continue
+                usage_y = self.stats_usage_bottom - (
+                    clamp(plotted_value, 0, self.stats_usage_scale) / self.stats_usage_scale
+                ) * (self.stats_usage_bottom - self.stats_usage_top)
+                canvas.create_oval(
+                    x - 5,
+                    usage_y - 5,
+                    x + 5,
+                    usage_y + 5,
+                    fill=color,
+                    outline=COLORS["ink"],
+                    width=2,
+                    tags="stats-selection",
+                )
+            for value, color in ((rate, COLORS["amber"]), (five_hour_rate, COLORS["coral"])):
+                plotted_rate = number(value)
+                if plotted_rate is None or self.stats_rate_scale <= 0:
+                    continue
+                rate_y = self.stats_rate_top + (
+                    (self.stats_rate_scale - clamp(plotted_rate, 0, self.stats_rate_scale))
+                    / self.stats_rate_scale
+                ) * (self.stats_rate_bottom - self.stats_rate_top)
+                canvas.create_oval(
+                    x - 5,
+                    rate_y - 5,
+                    x + 5,
+                    rate_y + 5,
+                    fill=color,
+                    outline=COLORS["ink"],
+                    width=2,
+                    tags="stats-selection",
+                )
+            daily_tokens = number(selected.get("daily_total_tokens"))
+            if daily_tokens is not None and self.stats_token_scale > 0:
+                token_y = self.stats_token_top + (
+                    (self.stats_token_scale - clamp(daily_tokens, 0, self.stats_token_scale))
+                    / self.stats_token_scale
+                ) * (self.stats_token_bottom - self.stats_token_top)
+                canvas.create_oval(
+                    x - 5,
+                    token_y - 5,
+                    x + 5,
+                    token_y + 5,
+                    fill=COLORS["mint"],
+                    outline=COLORS["ink"],
+                    width=2,
+                    tags="stats-selection",
+                )
+            local = datetime.fromtimestamp(selected["timestamp"]).astimezone()
+            self._update_statistics_cards(selected)
+            if self.stats_readout is not None:
+                self.stats_readout.configure(
+                    text=f"SELECTED {local.strftime('%a, %b %d')}  ·  daily totals + averages"
+                )
+            return
         if used is not None:
             usage_y = self.stats_usage_bottom - (used / 100) * (self.stats_usage_bottom - self.stats_usage_top)
             canvas.create_oval(
@@ -2325,9 +2619,250 @@ class UsageApp:
             x = left + fraction * (right - left)
             canvas.create_text(x, bottom + 18, text=axis_label(start_time + fraction * span), fill=COLORS["muted"], font=("Segoe UI", 8))
 
+    def _render_daily_statistics(self) -> None:
+        """Render one stock-chart-style bar per local calendar day."""
+
+        canvas = self.stats_canvas
+        if canvas is None:
+            return
+        canvas.delete("all")
+        canvas_width = max(640, int(canvas.winfo_width()))
+        canvas_height = max(560, int(canvas.winfo_height()))
+        daily_points = self.history.daily_statistics(HISTORY_RETENTION_DAYS)
+        self.stats_usage_points = self.history.chart_points(HISTORY_RETENTION_DAYS * 24)
+        self.stats_plot_points = daily_points
+        self.stats_live_card_data = daily_points[-1] if daily_points else {"daily": True}
+
+        card_groups = (
+            (
+                ("5H TOTAL USED", "--", COLORS["cyan"]),
+                ("WEEK TOTAL USED", "--", COLORS["violet"]),
+                ("5H AVG LEVEL", "--", COLORS["cyan"]),
+                ("WEEK AVG LEVEL", "--", COLORS["violet"]),
+            ),
+            (
+                ("5H AVG RATE", "--", COLORS["coral"]),
+                ("WEEK AVG RATE", "--", COLORS["amber"]),
+                ("5H PEAK RATE", "--", COLORS["coral"]),
+                ("WEEK PEAK RATE", "--", COLORS["amber"]),
+            ),
+            (
+                ("TOTAL TOKENS", "--", COLORS["mint"]),
+                ("AVG TOKEN PACE", "--", COLORS["coral"]),
+                ("PEAK TOKEN PACE", "--", COLORS["coral"]),
+                ("SAMPLES · RECORDED SPAN", "--", COLORS["soft"]),
+            ),
+        )
+        card_margin = 14
+        card_gap = 10
+        card_width = (canvas_width - card_margin * 2 - card_gap * 3) / 4
+        self.stats_card_label_items = []
+        self.stats_card_value_items = []
+        for row_index, cards in enumerate(card_groups):
+            y1 = 14 + row_index * 70
+            y2 = y1 + 62
+            for index, (label, value, color) in enumerate(cards):
+                x1 = card_margin + index * (card_width + card_gap)
+                x2 = x1 + card_width
+                canvas.create_rectangle(x1, y1, x2, y2, fill=COLORS["panel_raised"], outline=COLORS["line"])
+                label_item = canvas.create_text(
+                    x1 + 12,
+                    y1 + 15,
+                    text=label,
+                    anchor="w",
+                    fill=COLORS["muted"],
+                    font=("Segoe UI", 8, "bold"),
+                )
+                value_item = canvas.create_text(
+                    x1 + 12,
+                    y1 + 41,
+                    text=value,
+                    anchor="w",
+                    fill=color,
+                    font=("Segoe UI", 12, "bold"),
+                )
+                self.stats_card_label_items.append(label_item)
+                self.stats_card_value_items.append(value_item)
+
+        now_local = datetime.now().astimezone()
+        today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        range_start = today_start - timedelta(days=HISTORY_RETENTION_DAYS - 1)
+        range_end = today_start + timedelta(days=1)
+        start_time = range_start.timestamp()
+        end_time = range_end.timestamp()
+        span = max(1.0, end_time - start_time)
+        left, right = 58, max(250, canvas_width - 72)
+        self.stats_plot_start = start_time
+        self.stats_plot_end = end_time
+        self.stats_plot_left = left
+        self.stats_plot_right = right
+
+        def x_for(epoch: float) -> float:
+            return left + clamp((epoch - start_time) / span, 0, 1) * (right - left)
+
+        canvas.create_text(
+            18,
+            234,
+            text="DAILY TOTALS + AVERAGE PACE",
+            anchor="w",
+            fill=COLORS["soft"],
+            font=("Segoe UI", 8, "bold"),
+        )
+        canvas.create_text(
+            canvas_width - 18,
+            234,
+            text="5h total cyan · week total violet · average rates coral + amber · tokens lower",
+            anchor="e",
+            fill=COLORS["muted"],
+            font=("Segoe UI", 8),
+        )
+        canvas.create_text(
+            18,
+            249,
+            text=f"1 DAY PER BAR  ·  LAST {HISTORY_RETENTION_DAYS} CALENDAR DAYS",
+            anchor="w",
+            fill=COLORS["muted"],
+            font=("Segoe UI", 8),
+        )
+        canvas.create_text(
+            canvas_width - 18,
+            249,
+            text="missing days stay blank; totals use recorded reset-aware increases",
+            anchor="e",
+            fill=COLORS["muted"],
+            font=("Segoe UI", 8),
+        )
+
+        plot_top, full_plot_bottom = 266, max(500, canvas_height - 34)
+        token_height = max(88, (full_plot_bottom - plot_top) * 0.25)
+        token_top = full_plot_bottom - token_height
+        usage_bottom = token_top - 30
+        token_bottom = full_plot_bottom
+        self.stats_usage_top = plot_top
+        self.stats_usage_bottom = usage_bottom
+        self.stats_rate_top = plot_top
+        self.stats_rate_bottom = usage_bottom
+        self.stats_token_top = token_top
+        self.stats_token_bottom = token_bottom
+
+        usage_values = [
+            value
+            for point in daily_points
+            for value in (number(point.get("used_percent")), number(point.get("five_hour_used_percent")))
+            if value is not None and math.isfinite(value)
+        ]
+        observed_usage_max = max(usage_values, default=0.0)
+        usage_scale = max(20.0, math.ceil(observed_usage_max / 20.0) * 20.0)
+        self.stats_usage_scale = usage_scale
+        for value in (usage_scale, usage_scale / 2, 0):
+            y = usage_bottom - (value / usage_scale) * (usage_bottom - plot_top)
+            canvas.create_line(left, y, right, y, fill=COLORS["soft"] if value == 0 else COLORS["line"], width=2 if value == 0 else 1)
+            canvas.create_text(left - 9, y, text=f"{value:.0f} pts", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+
+        rate_values = [
+            value
+            for point in daily_points
+            for value in (number(point.get("rate_per_hour")), number(point.get("five_hour_rate_per_hour")))
+            if value is not None and math.isfinite(value)
+        ]
+        observed_rate_max = max(rate_values, default=0.0)
+        rate_scale = max(20.0, math.ceil(observed_rate_max / 20.0) * 20.0)
+        self.stats_rate_scale = rate_scale
+        for value in (rate_scale, rate_scale / 2, 0):
+            y = plot_top + ((rate_scale - value) / rate_scale) * (usage_bottom - plot_top)
+            sign = "+" if value > 0 else ""
+            canvas.create_text(canvas_width - 10, y, text=f"{sign}{value:.0f}/hr", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+
+        day_slot = (right - left) / HISTORY_RETENTION_DAYS
+        bar_width = max(2.0, min(14.0, day_slot * 0.28))
+        for point in daily_points:
+            x = x_for(point["timestamp"])
+            weekly_total = number(point.get("used_percent")) or 0.0
+            five_hour_total = number(point.get("five_hour_used_percent")) or 0.0
+            for bar_x, total, color in (
+                (x - bar_width * 0.65, five_hour_total, COLORS["cyan"]),
+                (x + bar_width * 0.65, weekly_total, COLORS["violet"]),
+            ):
+                y = usage_bottom - (clamp(total, 0, usage_scale) / usage_scale) * (usage_bottom - plot_top)
+                canvas.create_rectangle(
+                    bar_x - bar_width / 2,
+                    y,
+                    bar_x + bar_width / 2,
+                    usage_bottom,
+                    fill=color,
+                    outline="",
+                )
+
+        def draw_daily_rate(field: str, color: str) -> None:
+            coordinates: list[float] = []
+            previous_day: Optional[float] = None
+            for point in daily_points:
+                value = number(point.get(field))
+                day_start = number(point.get("day_start"))
+                if value is None or day_start is None:
+                    if len(coordinates) >= 4:
+                        canvas.create_line(*coordinates, fill=color, width=3)
+                    coordinates = []
+                    previous_day = None
+                    continue
+                if previous_day is not None and day_start - previous_day > 36 * 60 * 60:
+                    if len(coordinates) >= 4:
+                        canvas.create_line(*coordinates, fill=color, width=3)
+                    coordinates = []
+                y = plot_top + ((rate_scale - clamp(value, 0, rate_scale)) / rate_scale) * (usage_bottom - plot_top)
+                coordinates.extend((x_for(point["timestamp"]), y))
+                previous_day = day_start
+            if len(coordinates) >= 4:
+                canvas.create_line(*coordinates, fill=color, width=3)
+
+        draw_daily_rate("five_hour_rate_per_hour", COLORS["coral"])
+        draw_daily_rate("rate_per_hour", COLORS["amber"])
+        if not daily_points:
+            canvas.create_text(
+                (left + right) / 2,
+                (plot_top + usage_bottom) / 2,
+                text="Keep the counter running to build daily bars.",
+                fill=COLORS["muted"],
+                font=("Segoe UI", 10),
+            )
+
+        canvas.create_text(left, token_top - 10, text="DAILY TOKEN TOTAL", anchor="w", fill=COLORS["mint"], font=("Segoe UI", 8, "bold"))
+        token_values = [
+            float(point["daily_total_tokens"])
+            for point in daily_points
+            if number(point.get("daily_total_tokens")) is not None
+        ]
+        observed_token_max = max(token_values, default=0.0)
+        if observed_token_max > 0:
+            magnitude = 10 ** math.floor(math.log10(max(1.0, observed_token_max)))
+            token_scale = max(magnitude, math.ceil(observed_token_max / magnitude) * magnitude)
+        else:
+            token_scale = 1_000.0
+        self.stats_token_scale = token_scale
+        canvas.create_line(left, token_bottom, right, token_bottom, fill=COLORS["soft"], width=2)
+        canvas.create_text(canvas_width - 10, token_top, text=format_token_count(token_scale), anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+        canvas.create_text(canvas_width - 10, token_bottom, text="0", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+        token_bar_width = max(2.0, min(18.0, day_slot * 0.55))
+        for point in daily_points:
+            total = number(point.get("daily_total_tokens")) or 0.0
+            x = x_for(point["timestamp"])
+            y = token_top + ((token_scale - clamp(total, 0, token_scale)) / token_scale) * (token_bottom - token_top)
+            canvas.create_rectangle(x - token_bar_width / 2, y, x + token_bar_width / 2, token_bottom, fill=COLORS["mint"], outline="")
+
+        def axis_label(epoch: float) -> str:
+            return datetime.fromtimestamp(epoch).astimezone().strftime("%b %d")
+
+        for fraction in (0, 0.25, 0.5, 0.75, 1):
+            x = left + fraction * (right - left)
+            canvas.create_text(x, token_bottom + 18, text=axis_label(start_time + fraction * span), fill=COLORS["muted"], font=("Segoe UI", 8))
+        self._draw_statistics_selection()
+
     def _render_statistics(self) -> None:
         canvas = self.stats_canvas
         if canvas is None:
+            return
+        if self.stats_daily_view:
+            self._render_daily_statistics()
             return
         canvas.delete("all")
         canvas_width = max(640, int(canvas.winfo_width()))
@@ -2388,14 +2923,14 @@ class UsageApp:
 
         usage_cards = [
             ("5-HOUR USED", f"{five_hour_current:.0f}%" if five_hour_current is not None else "--", COLORS["cyan"]),
-            ("5-HOUR REMAINING", f"{five_hour_remaining:.0f}%" if five_hour_remaining is not None else "--", COLORS["mint"]),
             ("WEEKLY USED", f"{current:.0f}%" if current is not None else "--", COLORS["violet"]),
+            ("5-HOUR REMAINING", f"{five_hour_remaining:.0f}%" if five_hour_remaining is not None else "--", COLORS["mint"]),
             ("WEEKLY REMAINING", f"{remaining:.0f}%" if remaining is not None else "--", COLORS["mint"]),
         ]
         pace_cards = [
             ("5-HOUR RATE", rate_text(five_hour_current_rate), COLORS["coral"]),
-            ("5-HOUR ETA", self._format_eta(five_hour_current, five_hour_current_rate, self.snapshot.five_hour_resets_at), COLORS["mint"]),
             ("WEEKLY RATE", rate_text(current_rate), COLORS["amber"]),
+            ("5-HOUR ETA", self._format_eta(five_hour_current, five_hour_current_rate, self.snapshot.five_hour_resets_at), COLORS["mint"]),
             ("WEEKLY ETA", self._format_eta(current, current_rate, self.snapshot.resets_at), COLORS["mint"]),
         ]
         token_cards = [
@@ -2411,6 +2946,7 @@ class UsageApp:
         card_margin = 14
         card_gap = 10
         card_width = (canvas_width - card_margin * 2 - card_gap * 3) / 4
+        self.stats_card_label_items = []
         self.stats_card_value_items = []
         for row_index, cards in enumerate((usage_cards, pace_cards, token_cards)):
             y1 = 14 + row_index * 70
@@ -2419,8 +2955,9 @@ class UsageApp:
                 x1 = card_margin + index * (card_width + card_gap)
                 x2 = x1 + card_width
                 canvas.create_rectangle(x1, y1, x2, y2, fill=COLORS["panel_raised"], outline=COLORS["line"])
-                canvas.create_text(x1 + 12, y1 + 15, text=label, anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
+                label_item = canvas.create_text(x1 + 12, y1 + 15, text=label, anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
                 value_item = canvas.create_text(x1 + 12, y1 + 41, text=value, anchor="w", fill=color, font=("Segoe UI", 12, "bold"))
+                self.stats_card_label_items.append(label_item)
                 self.stats_card_value_items.append(value_item)
 
         start_time = time.time() - self.stats_period_hours * 3600
