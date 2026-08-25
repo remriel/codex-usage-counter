@@ -11,6 +11,7 @@ Track the restored 5-hour Codex allowance alongside the weekly allowance, packag
 - Local telemetry now reports a 300-minute primary window and a 10,080-minute secondary window.
 - The old v1.1.15 executable selects `primary` blindly, causing it to show 5-hour usage as if it were weekly.
 - Dual-window reading, history, main UI, tray behavior, milestones, rates, ETA, and Statistics are implemented, packaged, installed, and running.
+- Fresh README screenshots were captured from the current dual-window UI and Statistics view.
 - The current install is the unversioned `outputs\CodexUsageCounter\CodexUsageCounter.exe`; Start with Windows targets it.
 - The prior v1.1.15 executable/archive and four stale versioned README files were removed. Settings and history were preserved.
 
@@ -52,4 +53,4 @@ Track the restored 5-hour Codex allowance alongside the weekly allowance, packag
 
 ## Next steps
 
-1. Commit and push GitHub.
+1. Commit README/screenshot updates, publish the current executable release, and update the GitHub repository description.
