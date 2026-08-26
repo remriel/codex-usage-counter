@@ -2,7 +2,7 @@
 
 ## Objective
 
-Reduce Statistics chart clutter by rendering regular 5-hour/weekly usage as paired bars while retaining rate lines and full-resolution interaction.
+Separate the Statistics display into visually independent Usage, Pace, and Token Activity panes while preserving its shared time cursor and point-level cards.
 
 ## Current state
 
@@ -17,7 +17,8 @@ Reduce Statistics chart clutter by rendering regular 5-hour/weekly usage as pair
 - Statistics now includes a Daily interval with one bar per local calendar day across the retained 30-day history.
 - Daily cards show reset-aware total usage, average level, average/peak rate, token totals/pacing, and recorded sample span for the selected day.
 - Matching 5-hour and weekly Used, Remaining, Rate, and ETA cards are adjacent in the regular Statistics views; daily pairs use the same layout.
-- Regular minute-level Statistics ranges now render 5-hour and weekly usage as paired cyan/violet bars; rates remain coral/amber lines above them.
+- Regular minute-level Statistics ranges render 5-hour and weekly usage as paired cyan/violet bars, while their coral/amber pace lines are in their own pane.
+- The Daily view uses the same three-pane model: paired daily totals, paired daily average pace, and daily token totals.
 
 ## Decisions
 
@@ -34,6 +35,7 @@ Reduce Statistics chart clutter by rendering regular 5-hour/weekly usage as pair
 - Treat Daily as an interval, like a trading chart: one calendar day per bar, with missing days left blank rather than fabricated.
 - Sum positive allowance changes across reset boundaries for daily totals; display sampled daily averages separately.
 - Pixel-bin dense regular usage histories to roughly one paired bar per two horizontal pixels; keep every raw point available for selection and card updates.
+- Separate usage and pace vertically instead of overlaying them: the shared x-axis/cursor supports direct comparison, while independent y-axes avoid visual competition between state and change.
 
 ## Relevant files
 
@@ -66,7 +68,10 @@ Reduce Statistics chart clutter by rendering regular 5-hour/weekly usage as pair
 - The PyInstaller build completed successfully; the installed executable SHA-256 matches the build and the normal two-process packaged app is running.
 - A 30-day Tk render kept all 15,618 raw usage points interactive while drawing only 137 visible usage bars in a 526-pixel plot; both usage windows and selected-point cards remained functional.
 - The paired-bar PyInstaller build completed successfully; the installed executable hash matches and the normal two-process packaged app is running.
+- A source-level Tk render check verified exactly three non-overlapping panes in both regular and Daily modes, with the shared selection cursor still present.
+- The PyInstaller build passed. The rebuilt executable was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`, its SHA-256 matched the build output, and the normal two-process packaged app launched successfully.
+- A scan of Desktop, Downloads, Documents, and the project outputs found no older explicitly versioned `CodexUsageCounter-v*` executables or source archives to remove.
 
 ## Next steps
 
-1. No implementation work remains. Create a new numbered downloadable release only when explicitly requested.
+1. Commit and push the verified pane separation. Create a numbered downloadable release only when explicitly requested.
