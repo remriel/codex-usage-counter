@@ -2,7 +2,7 @@
 
 ## Objective
 
-Add a stock-chart-style daily Statistics interval and place every matching 5-hour/weekly statistic side by side.
+Reduce Statistics chart clutter by rendering regular 5-hour/weekly usage as paired bars while retaining rate lines and full-resolution interaction.
 
 ## Current state
 
@@ -17,6 +17,7 @@ Add a stock-chart-style daily Statistics interval and place every matching 5-hou
 - Statistics now includes a Daily interval with one bar per local calendar day across the retained 30-day history.
 - Daily cards show reset-aware total usage, average level, average/peak rate, token totals/pacing, and recorded sample span for the selected day.
 - Matching 5-hour and weekly Used, Remaining, Rate, and ETA cards are adjacent in the regular Statistics views; daily pairs use the same layout.
+- Regular minute-level Statistics ranges now render 5-hour and weekly usage as paired cyan/violet bars; rates remain coral/amber lines above them.
 
 ## Decisions
 
@@ -32,6 +33,7 @@ Add a stock-chart-style daily Statistics interval and place every matching 5-hou
 - Keep the Statistics cards as the primary selection readout: clicking or dragging the chart updates all card values to the selected timestamp.
 - Treat Daily as an interval, like a trading chart: one calendar day per bar, with missing days left blank rather than fabricated.
 - Sum positive allowance changes across reset boundaries for daily totals; display sampled daily averages separately.
+- Pixel-bin dense regular usage histories to roughly one paired bar per two horizontal pixels; keep every raw point available for selection and card updates.
 
 ## Relevant files
 
@@ -62,6 +64,8 @@ Add a stock-chart-style daily Statistics interval and place every matching 5-hou
 - A synthetic reset fixture produced 10 weekly points, 19 five-hour points, an 8.25% weekly average, and 400 daily tokens exactly as expected.
 - Tk render checks passed for 25 retained daily bars, all 12 daily cards, selected-day card updates, and paired 5-hour/weekly card ordering in both daily and minute-level views.
 - The PyInstaller build completed successfully; the installed executable SHA-256 matches the build and the normal two-process packaged app is running.
+- A 30-day Tk render kept all 15,618 raw usage points interactive while drawing only 137 visible usage bars in a 526-pixel plot; both usage windows and selected-point cards remained functional.
+- The paired-bar PyInstaller build completed successfully; the installed executable hash matches and the normal two-process packaged app is running.
 
 ## Next steps
 

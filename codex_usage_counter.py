@@ -3034,8 +3034,8 @@ class UsageApp:
             if len(coordinates) >= 4:
                 canvas.create_line(*coordinates, fill=color, width=3)
 
-        canvas.create_text(18, 234, text="5H + WEEKLY USAGE, RATE + TOKEN ACTIVITY", anchor="w", fill=COLORS["soft"], font=("Segoe UI", 8, "bold"))
-        canvas.create_text(canvas_width - 18, 234, text="5h cyan · week violet · 5h rate coral · week rate amber · tokens lower", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+        canvas.create_text(18, 234, text="5H + WEEKLY USAGE BARS, RATE LINES + TOKEN ACTIVITY", anchor="w", fill=COLORS["soft"], font=("Segoe UI", 8, "bold"))
+        canvas.create_text(canvas_width - 18, 234, text="5h bars cyan · week bars violet · 5h rate coral · week rate amber · tokens lower", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         scope_label = {1: "1 HOUR", 24 * 4: "4 DAYS", 24 * 7: "7 DAYS", 24 * 30: "30 DAYS"}.get(
             self.stats_period_hours,
             f"{self.stats_period_hours} HOURS",
@@ -3060,31 +3060,50 @@ class UsageApp:
             canvas.create_text(left - 9, y, text=f"{level}%", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
 
         if usage_points:
-            coordinates: list[float] = []
+            plot_width = max(1.0, right - left)
+            bin_width = 2.0
+            max_bin_index = max(0, int(plot_width // bin_width))
+            usage_bins: dict[int, dict[str, Any]] = {}
             for point in usage_points:
-                coordinates.extend(
-                    (
-                        x_for(point["timestamp"]),
-                        usage_bottom - (point["used_percent"] / 100) * (usage_bottom - plot_top),
+                x = x_for(point["timestamp"])
+                bin_index = int(clamp((x - left) // bin_width, 0, max_bin_index))
+                bucket = usage_bins.setdefault(bin_index, {"timestamp": point["timestamp"]})
+                bucket["timestamp"] = point["timestamp"]
+                bucket["used_percent"] = point["used_percent"]
+                if number(point.get("five_hour_used_percent")) is not None:
+                    bucket["five_hour_used_percent"] = point["five_hour_used_percent"]
+
+            bar_points = [usage_bins[key] for key in sorted(usage_bins)]
+            bar_x_values = [x_for(point["timestamp"]) for point in bar_points]
+            positive_spacings = [
+                current - previous
+                for previous, current in zip(bar_x_values, bar_x_values[1:])
+                if current > previous
+            ]
+            observed_spacing = min(positive_spacings, default=8.0)
+            pair_width = max(2.0, min(12.0, observed_spacing * 0.82))
+            individual_width = max(1.0, pair_width * 0.42)
+            offset = pair_width * 0.26
+            for point in bar_points:
+                x = x_for(point["timestamp"])
+                weekly_used = number(point.get("used_percent"))
+                five_hour_used = number(point.get("five_hour_used_percent"))
+                for bar_x, value, color, tag in (
+                    (x - offset, five_hour_used, COLORS["cyan"], "stats-five-hour-usage-bar"),
+                    (x + offset, weekly_used, COLORS["violet"], "stats-weekly-usage-bar"),
+                ):
+                    if value is None:
+                        continue
+                    y = usage_bottom - (clamp(value, 0, 100) / 100) * (usage_bottom - plot_top)
+                    canvas.create_rectangle(
+                        bar_x - individual_width / 2,
+                        y,
+                        bar_x + individual_width / 2,
+                        usage_bottom,
+                        fill=color,
+                        outline="",
+                        tags=("stats-usage-bar", tag),
                     )
-                )
-            if len(coordinates) >= 4:
-                canvas.create_line(*coordinates, fill=COLORS["violet"], width=3)
-            latest_x, latest_y = coordinates[-2:]
-            canvas.create_oval(latest_x - 5, latest_y - 5, latest_x + 5, latest_y + 5, fill=COLORS["violet"], outline=COLORS["ink"], width=2)
-        if five_hour_points:
-            five_hour_coordinates: list[float] = []
-            for point in five_hour_points:
-                five_hour_coordinates.extend(
-                    (
-                        x_for(point["timestamp"]),
-                        usage_bottom - (point["five_hour_used_percent"] / 100) * (usage_bottom - plot_top),
-                    )
-                )
-            if len(five_hour_coordinates) >= 4:
-                canvas.create_line(*five_hour_coordinates, fill=COLORS["cyan"], width=3)
-            five_hour_x, five_hour_y = five_hour_coordinates[-2:]
-            canvas.create_oval(five_hour_x - 5, five_hour_y - 5, five_hour_x + 5, five_hour_y + 5, fill=COLORS["cyan"], outline=COLORS["ink"], width=2)
         if not usage_points and not five_hour_points:
             canvas.create_text((left + right) / 2, (plot_top + usage_bottom) / 2, text="Keep the counter running to build this graph.", fill=COLORS["muted"], font=("Segoe UI", 10))
 
