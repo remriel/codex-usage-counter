@@ -17,7 +17,7 @@ A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, rese
 - Adds a stock-chart-style **Daily** interval with one bar per local calendar day, reset-aware daily 5-hour and weekly totals, daily average/peak rates, and daily token totals.
 - Opens Statistics as a fullscreen view with a responsive, edge-to-edge chart canvas.
 - Keeps matching 5-hour and weekly cards side by side and updates those cards when a minute or daily point is clicked, dragged across, or selected with the mouse wheel.
-- Provides separate 5-hour and weekly usage/rate lines, token activity, observed tokens per allowance point, ETA, reset-aware regression, and time-series statistics.
+- Provides paired 5-hour and weekly usage bars, separate rate lines, token activity, observed tokens per allowance point, ETA, reset-aware regression, and time-series statistics.
 
 ## Quick start on Windows
 
@@ -36,7 +36,7 @@ The executable is self-contained and does not require Python to be installed.
 
 ### Statistics view
 
-![Codex Usage Counter Statistics showing 5-hour and weekly usage/rate lines with token activity](screenshots/statistics.png)
+![Codex Usage Counter Statistics showing paired 5-hour and weekly usage bars, rate lines, and token activity](screenshots/statistics.png)
 
 ## How the data is read
 
