@@ -2,7 +2,7 @@
 
 ## Objective
 
-Reduce Statistics chart clutter by rendering regular 5-hour/weekly usage as paired bars while retaining rate lines and full-resolution interaction.
+Make Statistics visually cohesive and immediately understandable after the usage-history change from lines to bars.
 
 ## Current state
 
@@ -17,7 +17,11 @@ Reduce Statistics chart clutter by rendering regular 5-hour/weekly usage as pair
 - Statistics now includes a Daily interval with one bar per local calendar day across the retained 30-day history.
 - Daily cards show reset-aware total usage, average level, average/peak rate, token totals/pacing, and recorded sample span for the selected day.
 - Matching 5-hour and weekly Used, Remaining, Rate, and ETA cards are adjacent in the regular Statistics views; daily pairs use the same layout.
-- Regular minute-level Statistics ranges now render 5-hour and weekly usage as paired cyan/violet bars; rates remain coral/amber lines above them.
+- Regular minute-level Statistics ranges render 5-hour and weekly usage as paired cyan/violet bars, while their coral/amber pace lines are in their own pane.
+- The Daily view uses the same three-pane model: paired daily totals, paired daily average pace, and daily token totals.
+- Usage bars now occupy two directly labeled small-multiple lanes inside one Usage pane: 5-hour above Weekly, both using the same scale and time axis.
+- Cyan consistently identifies 5-hour data, violet identifies weekly data, and mint identifies token data across cards, bars, pace lines, and selection markers.
+- Usage cards have stronger value typography than pace and token cards; pane headings contain their own direct series keys, removing the detached color legend.
 
 ## Decisions
 
@@ -34,6 +38,10 @@ Reduce Statistics chart clutter by rendering regular 5-hour/weekly usage as pair
 - Treat Daily as an interval, like a trading chart: one calendar day per bar, with missing days left blank rather than fabricated.
 - Sum positive allowance changes across reset boundaries for daily totals; display sampled daily averages separately.
 - Pixel-bin dense regular usage histories to roughly one paired bar per two horizontal pixels; keep every raw point available for selection and card updates.
+- Separate usage and pace vertically instead of overlaying them: the shared x-axis/cursor supports direct comparison, while independent y-axes avoid visual competition between state and change.
+- Keep bars for usage, but use aligned series lanes rather than alternating paired bars at each timestamp; this preserves the requested bar encoding without turning dense history into visual texture.
+- Use series identity—not metric type—as the persistent color role. Pace is distinguished by its line mark and pane position, not unrelated coral/amber hues.
+- Render usage lanes as contiguous step-filled blocks: adjacent recorded time bins share an edge and fill from zero to the recorded value. Forward-fill known 5-hour values across later recorded bins, but do not invent values before 5-hour telemetry begins. Daily bars fill their complete calendar-day slot while missing days remain blank.
 
 ## Relevant files
 
@@ -66,7 +74,15 @@ Reduce Statistics chart clutter by rendering regular 5-hour/weekly usage as pair
 - The PyInstaller build completed successfully; the installed executable SHA-256 matches the build and the normal two-process packaged app is running.
 - A 30-day Tk render kept all 15,618 raw usage points interactive while drawing only 137 visible usage bars in a 526-pixel plot; both usage windows and selected-point cards remained functional.
 - The paired-bar PyInstaller build completed successfully; the installed executable hash matches and the normal two-process packaged app is running.
+- A source-level Tk render check verified exactly three non-overlapping panes in both regular and Daily modes, with the shared selection cursor still present.
+- The PyInstaller build passed. The rebuilt executable was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`, its SHA-256 matched the build output, and the normal two-process packaged app launched successfully.
+- A scan of Desktop, Downloads, Documents, and the project outputs found no older explicitly versioned `CodexUsageCounter-v*` executables or source archives to remove.
+- Tk QA verified non-overlapping panes and 5-hour/weekly usage lanes in regular and Daily modes, lane-contained bars, linked selection, and retention of all 15,805 raw 30-day points for interaction. The visible 30-day bars were pixel-binned to 6 available 5-hour bars and 80 weekly bars from the current history.
+- Windows visual capture failed after the documented single recovery attempt (`SetIsBorderRequired`/destroyed capture stream), so no screenshot-based acceptance claim was made.
+- Continuity QA verified that every adjacent regular 5-hour and weekly usage block meets or overlaps by at most Canvas rounding, selected-point markers still render, and each recorded Daily bar fills its complete 17-pixel calendar-day slot. Missing Daily dates remain blank rather than fabricating totals.
+- The final PyInstaller artifact was installed over the prior unversioned executable. Installed/build SHA-256 hashes match (`576F5FC23FA3671B901015F8A062006C213B8C8E76C23D10E1986CC8111C0348`), and the normal two-process packaged app launched successfully.
+- The previous installed executable was replaced. A fresh scan found no other versioned `CodexUsageCounter-v*` executables or source archives on Desktop, Downloads, Documents, or in the project outputs, so no additional files required removal.
 
 ## Next steps
 
-1. No implementation work remains. Create a new numbered downloadable release only when explicitly requested.
+1. Commit and push the verified redesign. Create a numbered downloadable release only when explicitly requested.
