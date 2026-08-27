@@ -87,4 +87,4 @@ Make Statistics visually cohesive and immediately understandable after the usage
 
 ## Next steps
 
-1. Commit and push the refreshed screenshots and plain-language README. Update the GitHub repository description to match.
+1. Keep public screenshots and README copy synchronized with future UI releases.
