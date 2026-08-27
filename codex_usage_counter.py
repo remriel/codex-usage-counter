@@ -1581,6 +1581,10 @@ class UsageApp:
         self.stats_plot_right = 625
         self.stats_usage_top = 128
         self.stats_usage_bottom = 286
+        self.stats_five_hour_usage_top = 128
+        self.stats_five_hour_usage_bottom = 203
+        self.stats_weekly_usage_top = 211
+        self.stats_weekly_usage_bottom = 286
         self.stats_rate_top = 343
         self.stats_rate_bottom = 508
         self.stats_rate_scale = 1.0
@@ -2101,7 +2105,7 @@ class UsageApp:
         ).pack(side="left")
         tk.Label(
             toolbar,
-            text="usage + smoothed rate",
+            text="5-hour · weekly · tokens",
             bg=COLORS["ink"],
             fg=COLORS["muted"],
             font=("Segoe UI", 8),
@@ -2288,10 +2292,10 @@ class UsageApp:
                 "WEEK TOTAL USED",
                 "5H AVG LEVEL",
                 "WEEK AVG LEVEL",
-                "5H AVG RATE",
-                "WEEK AVG RATE",
-                "5H PEAK RATE",
-                "WEEK PEAK RATE",
+                "5H AVG PACE",
+                "WEEK AVG PACE",
+                "5H PEAK PACE",
+                "WEEK PEAK PACE",
                 "TOTAL TOKENS",
                 "AVG TOKEN PACE",
                 "PEAK TOKEN PACE",
@@ -2350,8 +2354,8 @@ class UsageApp:
             "WEEKLY USED",
             "5-HOUR REMAINING",
             "WEEKLY REMAINING",
-            "5-HOUR RATE",
-            "WEEKLY RATE",
+            "5-HOUR PACE",
+            "WEEKLY PACE",
             "5-HOUR ETA",
             "WEEKLY ETA",
             "CURRENT TASK TOKENS",
@@ -2413,13 +2417,26 @@ class UsageApp:
         five_hour_rate = selected.get("five_hour_rate_per_hour")
         token_rate = selected.get("token_rate_per_minute")
         if self.stats_daily_view:
-            for value, color in ((used, COLORS["violet"]), (five_hour_used, COLORS["cyan"])):
+            for value, color, lane_top, lane_bottom in (
+                (
+                    used,
+                    COLORS["violet"],
+                    self.stats_weekly_usage_top,
+                    self.stats_weekly_usage_bottom,
+                ),
+                (
+                    five_hour_used,
+                    COLORS["cyan"],
+                    self.stats_five_hour_usage_top,
+                    self.stats_five_hour_usage_bottom,
+                ),
+            ):
                 plotted_value = number(value)
                 if plotted_value is None or self.stats_usage_scale <= 0:
                     continue
-                usage_y = self.stats_usage_bottom - (
+                usage_y = lane_bottom - (
                     clamp(plotted_value, 0, self.stats_usage_scale) / self.stats_usage_scale
-                ) * (self.stats_usage_bottom - self.stats_usage_top)
+                ) * (lane_bottom - lane_top)
                 canvas.create_oval(
                     x - 5,
                     usage_y - 5,
@@ -2430,7 +2447,7 @@ class UsageApp:
                     width=2,
                     tags="stats-selection",
                 )
-            for value, color in ((rate, COLORS["amber"]), (five_hour_rate, COLORS["coral"])):
+            for value, color in ((rate, COLORS["violet"]), (five_hour_rate, COLORS["cyan"])):
                 plotted_rate = number(value)
                 if plotted_rate is None or self.stats_rate_scale <= 0:
                     continue
@@ -2472,7 +2489,9 @@ class UsageApp:
                 )
             return
         if used is not None:
-            usage_y = self.stats_usage_bottom - (used / 100) * (self.stats_usage_bottom - self.stats_usage_top)
+            usage_y = self.stats_weekly_usage_bottom - (clamp(used, 0, 100) / 100) * (
+                self.stats_weekly_usage_bottom - self.stats_weekly_usage_top
+            )
             canvas.create_oval(
                 x - 5,
                 usage_y - 5,
@@ -2491,7 +2510,7 @@ class UsageApp:
                 rate_y - 5,
                 x + 5,
                 rate_y + 5,
-                fill=COLORS["amber"],
+                fill=COLORS["violet"],
                 outline=COLORS["ink"],
                 width=2,
                 tags="stats-selection",
@@ -2518,13 +2537,15 @@ class UsageApp:
                 five_hour_rate_y - 5,
                 x + 5,
                 five_hour_rate_y + 5,
-                fill=COLORS["coral"],
+                fill=COLORS["cyan"],
                 outline=COLORS["ink"],
                 width=2,
                 tags="stats-selection",
             )
         if five_hour_used is not None:
-            five_hour_y = self.stats_usage_bottom - (five_hour_used / 100) * (self.stats_usage_bottom - self.stats_usage_top)
+            five_hour_y = self.stats_five_hour_usage_bottom - (clamp(five_hour_used, 0, 100) / 100) * (
+                self.stats_five_hour_usage_bottom - self.stats_five_hour_usage_top
+            )
             canvas.create_oval(
                 x - 5,
                 five_hour_y - 5,
@@ -2659,13 +2680,14 @@ class UsageApp:
         left: float,
         right: float,
         geometry: dict[str, float],
+        usage_label: str,
         token_label: str,
     ) -> None:
         """Draw visually separate panes while preserving a shared time axis."""
 
         panes = (
-            ("usage", "USAGE · 5H + WEEKLY", COLORS["soft"]),
-            ("rate", "PACE · POINTS / HOUR", COLORS["amber"]),
+            ("usage", usage_label, COLORS["soft"]),
+            ("rate", "PACE · POINTS / HOUR", COLORS["soft"]),
             ("token", token_label, COLORS["mint"]),
         )
         for key, label, color in panes:
@@ -2689,6 +2711,84 @@ class UsageApp:
                 fill=color,
                 font=("Segoe UI", 8, "bold"),
             )
+            if key in ("usage", "rate"):
+                canvas.create_text(
+                    right - 76,
+                    pane_top + 10,
+                    text="5-HOUR",
+                    anchor="e",
+                    fill=COLORS["cyan"],
+                    font=("Segoe UI", 8, "bold"),
+                )
+                canvas.create_text(
+                    right - 10,
+                    pane_top + 10,
+                    text="WEEKLY",
+                    anchor="e",
+                    fill=COLORS["violet"],
+                    font=("Segoe UI", 8, "bold"),
+                )
+
+    def _statistics_usage_lanes(self, top: float, bottom: float) -> dict[str, tuple[float, float]]:
+        """Return two compact small-multiple lanes that share one usage scale."""
+
+        lane_gap = 8.0
+        lane_height = max(1.0, (bottom - top - lane_gap) / 2)
+        five_hour_bottom = top + lane_height
+        return {
+            "five_hour": (top, five_hour_bottom),
+            "weekly": (five_hour_bottom + lane_gap, bottom),
+        }
+
+    def _draw_statistics_usage_lanes(
+        self,
+        canvas: tk.Canvas,
+        left: float,
+        right: float,
+        top: float,
+        bottom: float,
+        scale: float,
+        scale_suffix: str,
+    ) -> dict[str, tuple[float, float]]:
+        """Draw directly labeled 5-hour and weekly usage lanes."""
+
+        lanes = self._statistics_usage_lanes(top, bottom)
+        for key, label, color in (
+            ("five_hour", "5H", COLORS["cyan"]),
+            ("weekly", "WEEK", COLORS["violet"]),
+        ):
+            lane_top, lane_bottom = lanes[key]
+            canvas.create_rectangle(
+                left,
+                lane_top,
+                right,
+                lane_bottom,
+                fill=COLORS["panel_raised"],
+                outline=COLORS["line"],
+                width=1,
+                tags=("stats-usage-lane", f"stats-{key}-usage-lane"),
+            )
+            canvas.create_text(
+                left - 10,
+                (lane_top + lane_bottom) / 2,
+                text=label,
+                anchor="e",
+                fill=color,
+                font=("Segoe UI", 8, "bold"),
+            )
+            midpoint_y = lane_bottom - 0.5 * (lane_bottom - lane_top)
+            canvas.create_line(left, midpoint_y, right, midpoint_y, fill=COLORS["line"], dash=(3, 5))
+            canvas.create_text(
+                right - 6,
+                lane_top + 2,
+                text=f"{scale:.0f}{scale_suffix}",
+                anchor="ne",
+                fill=COLORS["muted"],
+                font=("Segoe UI", 7),
+            )
+        self.stats_five_hour_usage_top, self.stats_five_hour_usage_bottom = lanes["five_hour"]
+        self.stats_weekly_usage_top, self.stats_weekly_usage_bottom = lanes["weekly"]
+        return lanes
 
     def _render_daily_statistics(self) -> None:
         """Render one stock-chart-style bar per local calendar day."""
@@ -2712,15 +2812,15 @@ class UsageApp:
                 ("WEEK AVG LEVEL", "--", COLORS["violet"]),
             ),
             (
-                ("5H AVG RATE", "--", COLORS["coral"]),
-                ("WEEK AVG RATE", "--", COLORS["amber"]),
-                ("5H PEAK RATE", "--", COLORS["coral"]),
-                ("WEEK PEAK RATE", "--", COLORS["amber"]),
+                ("5H AVG PACE", "--", COLORS["cyan"]),
+                ("WEEK AVG PACE", "--", COLORS["violet"]),
+                ("5H PEAK PACE", "--", COLORS["cyan"]),
+                ("WEEK PEAK PACE", "--", COLORS["violet"]),
             ),
             (
                 ("TOTAL TOKENS", "--", COLORS["mint"]),
-                ("AVG TOKEN PACE", "--", COLORS["coral"]),
-                ("PEAK TOKEN PACE", "--", COLORS["coral"]),
+                ("AVG TOKEN PACE", "--", COLORS["mint"]),
+                ("PEAK TOKEN PACE", "--", COLORS["mint"]),
                 ("SAMPLES · RECORDED SPAN", "--", COLORS["soft"]),
             ),
         )
@@ -2750,7 +2850,7 @@ class UsageApp:
                     text=value,
                     anchor="w",
                     fill=color,
-                    font=("Segoe UI", 12, "bold"),
+                    font=("Segoe UI", 14 if row_index == 0 else 12, "bold"),
                 )
                 self.stats_card_label_items.append(label_item)
                 self.stats_card_value_items.append(value_item)
@@ -2774,7 +2874,7 @@ class UsageApp:
         canvas.create_text(
             18,
             234,
-            text="DAILY USAGE + PACE + TOKEN ACTIVITY",
+            text="DAILY HISTORY",
             anchor="w",
             fill=COLORS["soft"],
             font=("Segoe UI", 8, "bold"),
@@ -2782,7 +2882,7 @@ class UsageApp:
         canvas.create_text(
             canvas_width - 18,
             234,
-            text="5h cyan · weekly violet · 5h pace coral · weekly pace amber",
+            text="one day per bar · select any day to update the cards",
             anchor="e",
             fill=COLORS["muted"],
             font=("Segoe UI", 8),
@@ -2790,7 +2890,7 @@ class UsageApp:
         canvas.create_text(
             18,
             249,
-            text=f"1 DAY PER BAR  ·  LAST {HISTORY_RETENTION_DAYS} CALENDAR DAYS",
+            text=f"LAST {HISTORY_RETENTION_DAYS} CALENDAR DAYS",
             anchor="w",
             fill=COLORS["muted"],
             font=("Segoe UI", 8),
@@ -2817,7 +2917,14 @@ class UsageApp:
         self.stats_rate_bottom = rate_bottom
         self.stats_token_top = token_top
         self.stats_token_bottom = token_bottom
-        self._draw_statistics_panes(canvas, left, right, geometry, "DAILY TOKEN TOTAL")
+        self._draw_statistics_panes(
+            canvas,
+            left,
+            right,
+            geometry,
+            "USAGE TOTALS · POINTS / DAY",
+            "DAILY TOKEN TOTAL",
+        )
 
         usage_values = [
             value
@@ -2828,10 +2935,15 @@ class UsageApp:
         observed_usage_max = max(usage_values, default=0.0)
         usage_scale = max(20.0, math.ceil(observed_usage_max / 20.0) * 20.0)
         self.stats_usage_scale = usage_scale
-        for value in (usage_scale, usage_scale / 2, 0):
-            y = usage_bottom - (value / usage_scale) * (usage_bottom - usage_top)
-            canvas.create_line(left, y, right, y, fill=COLORS["soft"] if value == 0 else COLORS["line"], width=2 if value == 0 else 1)
-            canvas.create_text(left - 9, y, text=f"{value:.0f} pts", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+        usage_lanes = self._draw_statistics_usage_lanes(
+            canvas,
+            left,
+            right,
+            usage_top,
+            usage_bottom,
+            usage_scale,
+            " pts",
+        )
 
         rate_values = [
             value
@@ -2849,23 +2961,30 @@ class UsageApp:
             canvas.create_text(canvas_width - 10, y, text=f"{sign}{value:.0f}/hr", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
 
         day_slot = (right - left) / HISTORY_RETENTION_DAYS
-        bar_width = max(2.0, min(14.0, day_slot * 0.28))
         for point in daily_points:
-            x = x_for(point["timestamp"])
+            day_start = number(point.get("day_start"))
+            if day_start is None:
+                continue
+            day_local = datetime.fromtimestamp(day_start).astimezone()
+            next_day_start = (day_local + timedelta(days=1)).timestamp()
+            bar_left = x_for(day_start)
+            bar_right = x_for(next_day_start)
             weekly_total = number(point.get("used_percent")) or 0.0
             five_hour_total = number(point.get("five_hour_used_percent")) or 0.0
-            for bar_x, total, color in (
-                (x - bar_width * 0.65, five_hour_total, COLORS["cyan"]),
-                (x + bar_width * 0.65, weekly_total, COLORS["violet"]),
+            for lane_key, total, color, tag in (
+                ("five_hour", five_hour_total, COLORS["cyan"], "stats-five-hour-usage-bar"),
+                ("weekly", weekly_total, COLORS["violet"], "stats-weekly-usage-bar"),
             ):
-                y = usage_bottom - (clamp(total, 0, usage_scale) / usage_scale) * (usage_bottom - usage_top)
+                lane_top, lane_bottom = usage_lanes[lane_key]
+                y = lane_bottom - (clamp(total, 0, usage_scale) / usage_scale) * (lane_bottom - lane_top)
                 canvas.create_rectangle(
-                    bar_x - bar_width / 2,
+                    bar_left,
                     y,
-                    bar_x + bar_width / 2,
-                    usage_bottom,
+                    bar_right + 0.5,
+                    lane_bottom,
                     fill=color,
                     outline="",
+                    tags=("stats-usage-bar", tag),
                 )
 
         def draw_daily_rate(field: str, color: str) -> None:
@@ -2890,8 +3009,8 @@ class UsageApp:
             if len(coordinates) >= 4:
                 canvas.create_line(*coordinates, fill=color, width=3)
 
-        draw_daily_rate("five_hour_rate_per_hour", COLORS["coral"])
-        draw_daily_rate("rate_per_hour", COLORS["amber"])
+        draw_daily_rate("five_hour_rate_per_hour", COLORS["cyan"])
+        draw_daily_rate("rate_per_hour", COLORS["violet"])
         if not daily_points:
             canvas.create_text(
                 (left + right) / 2,
@@ -3010,23 +3129,23 @@ class UsageApp:
         usage_cards = [
             ("5-HOUR USED", f"{five_hour_current:.0f}%" if five_hour_current is not None else "--", COLORS["cyan"]),
             ("WEEKLY USED", f"{current:.0f}%" if current is not None else "--", COLORS["violet"]),
-            ("5-HOUR REMAINING", f"{five_hour_remaining:.0f}%" if five_hour_remaining is not None else "--", COLORS["mint"]),
-            ("WEEKLY REMAINING", f"{remaining:.0f}%" if remaining is not None else "--", COLORS["mint"]),
+            ("5-HOUR REMAINING", f"{five_hour_remaining:.0f}%" if five_hour_remaining is not None else "--", COLORS["cyan"]),
+            ("WEEKLY REMAINING", f"{remaining:.0f}%" if remaining is not None else "--", COLORS["violet"]),
         ]
         pace_cards = [
-            ("5-HOUR RATE", rate_text(five_hour_current_rate), COLORS["coral"]),
-            ("WEEKLY RATE", rate_text(current_rate), COLORS["amber"]),
-            ("5-HOUR ETA", self._format_eta(five_hour_current, five_hour_current_rate, self.snapshot.five_hour_resets_at), COLORS["mint"]),
-            ("WEEKLY ETA", self._format_eta(current, current_rate, self.snapshot.resets_at), COLORS["mint"]),
+            ("5-HOUR PACE", rate_text(five_hour_current_rate), COLORS["cyan"]),
+            ("WEEKLY PACE", rate_text(current_rate), COLORS["violet"]),
+            ("5-HOUR ETA", self._format_eta(five_hour_current, five_hour_current_rate, self.snapshot.five_hour_resets_at), COLORS["cyan"]),
+            ("WEEKLY ETA", self._format_eta(current, current_rate, self.snapshot.resets_at), COLORS["violet"]),
         ]
         token_cards = [
-            ("CURRENT TASK TOKENS", format_token_count(current_tokens), COLORS["cyan"]),
+            ("CURRENT TASK TOKENS", format_token_count(current_tokens), COLORS["mint"]),
             ("LAST RESPONSE", format_token_count(self.snapshot.last_tokens), COLORS["soft"]),
-            ("TOKEN PACE", format_token_rate(current_token_rate), COLORS["coral"]),
+            ("TOKEN PACE", format_token_rate(current_token_rate), COLORS["mint"]),
             (
                 "TOKENS / 1%  5H · WEEK",
                 f"{format_token_count(five_hour_tokens_per_point)} · {format_token_count(tokens_per_point)}",
-                COLORS["amber"],
+                COLORS["mint"],
             ),
         ]
         card_margin = 14
@@ -3042,7 +3161,7 @@ class UsageApp:
                 x2 = x1 + card_width
                 canvas.create_rectangle(x1, y1, x2, y2, fill=COLORS["panel_raised"], outline=COLORS["line"])
                 label_item = canvas.create_text(x1 + 12, y1 + 15, text=label, anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
-                value_item = canvas.create_text(x1 + 12, y1 + 41, text=value, anchor="w", fill=color, font=("Segoe UI", 12, "bold"))
+                value_item = canvas.create_text(x1 + 12, y1 + 41, text=value, anchor="w", fill=color, font=("Segoe UI", 14 if row_index == 0 else 12, "bold"))
                 self.stats_card_label_items.append(label_item)
                 self.stats_card_value_items.append(value_item)
 
@@ -3120,8 +3239,8 @@ class UsageApp:
             if len(coordinates) >= 4:
                 canvas.create_line(*coordinates, fill=color, width=3)
 
-        canvas.create_text(18, 234, text="USAGE + PACE + TOKEN ACTIVITY", anchor="w", fill=COLORS["soft"], font=("Segoe UI", 8, "bold"))
-        canvas.create_text(canvas_width - 18, 234, text="5h cyan · weekly violet · 5h pace coral · weekly pace amber", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+        canvas.create_text(18, 234, text="LIVE HISTORY", anchor="w", fill=COLORS["soft"], font=("Segoe UI", 8, "bold"))
+        canvas.create_text(canvas_width - 18, 234, text="select a point to update every card", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         scope_label = {1: "1 HOUR", 24 * 4: "4 DAYS", 24 * 7: "7 DAYS", 24 * 30: "30 DAYS"}.get(
             self.stats_period_hours,
             f"{self.stats_period_hours} HOURS",
@@ -3142,15 +3261,27 @@ class UsageApp:
         self.stats_rate_bottom = rate_bottom
         self.stats_token_top = token_top
         self.stats_token_bottom = token_bottom
-        self._draw_statistics_panes(canvas, left, right, geometry, "TOKEN ACTIVITY")
-        for level in (0, 25, 50, 75, 100):
-            y = usage_bottom - (level / 100) * (usage_bottom - usage_top)
-            canvas.create_line(left, y, right, y, fill=COLORS["line"], width=1)
-            canvas.create_text(left - 9, y, text=f"{level}%", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+        self._draw_statistics_panes(
+            canvas,
+            left,
+            right,
+            geometry,
+            "USAGE HISTORY · 0–100%",
+            "TOKEN ACTIVITY",
+        )
+        usage_lanes = self._draw_statistics_usage_lanes(
+            canvas,
+            left,
+            right,
+            usage_top,
+            usage_bottom,
+            100.0,
+            "%",
+        )
 
         if usage_points:
             plot_width = max(1.0, right - left)
-            bin_width = 2.0
+            bin_width = 4.0
             max_bin_index = max(0, int(plot_width // bin_width))
             usage_bins: dict[int, dict[str, Any]] = {}
             for point in usage_points:
@@ -3163,32 +3294,39 @@ class UsageApp:
                     bucket["five_hour_used_percent"] = point["five_hour_used_percent"]
 
             bar_points = [usage_bins[key] for key in sorted(usage_bins)]
-            bar_x_values = [x_for(point["timestamp"]) for point in bar_points]
-            positive_spacings = [
-                current - previous
-                for previous, current in zip(bar_x_values, bar_x_values[1:])
-                if current > previous
-            ]
-            observed_spacing = min(positive_spacings, default=8.0)
-            pair_width = max(2.0, min(12.0, observed_spacing * 0.82))
-            individual_width = max(1.0, pair_width * 0.42)
-            offset = pair_width * 0.26
+            last_five_hour_value: Optional[float] = None
             for point in bar_points:
-                x = x_for(point["timestamp"])
+                five_hour_value = number(point.get("five_hour_used_percent"))
+                if five_hour_value is not None:
+                    last_five_hour_value = five_hour_value
+                elif last_five_hour_value is not None:
+                    point["five_hour_used_percent"] = last_five_hour_value
+            bar_x_values = [x_for(point["timestamp"]) for point in bar_points]
+            for index, point in enumerate(bar_points):
+                x = bar_x_values[index]
+                if len(bar_x_values) == 1:
+                    bar_left = max(left, x - bin_width / 2)
+                    bar_right = min(right, x + bin_width / 2)
+                else:
+                    previous_x = bar_x_values[index - 1] if index > 0 else x - (bar_x_values[1] - x)
+                    next_x = bar_x_values[index + 1] if index + 1 < len(bar_x_values) else x + (x - bar_x_values[index - 1])
+                    bar_left = max(left, (previous_x + x) / 2)
+                    bar_right = min(right, (x + next_x) / 2)
                 weekly_used = number(point.get("used_percent"))
                 five_hour_used = number(point.get("five_hour_used_percent"))
-                for bar_x, value, color, tag in (
-                    (x - offset, five_hour_used, COLORS["cyan"], "stats-five-hour-usage-bar"),
-                    (x + offset, weekly_used, COLORS["violet"], "stats-weekly-usage-bar"),
+                for lane_key, value, color, tag in (
+                    ("five_hour", five_hour_used, COLORS["cyan"], "stats-five-hour-usage-bar"),
+                    ("weekly", weekly_used, COLORS["violet"], "stats-weekly-usage-bar"),
                 ):
                     if value is None:
                         continue
-                    y = usage_bottom - (clamp(value, 0, 100) / 100) * (usage_bottom - usage_top)
+                    lane_top, lane_bottom = usage_lanes[lane_key]
+                    y = lane_bottom - (clamp(value, 0, 100) / 100) * (lane_bottom - lane_top)
                     canvas.create_rectangle(
-                        bar_x - individual_width / 2,
+                        bar_left,
                         y,
-                        bar_x + individual_width / 2,
-                        usage_bottom,
+                        bar_right + 0.5,
+                        lane_bottom,
                         fill=color,
                         outline="",
                         tags=("stats-usage-bar", tag),
@@ -3219,7 +3357,7 @@ class UsageApp:
                 lambda point: rate_top
                 + ((rate_scale - clamp(point["rate_per_hour"], 0, rate_scale)) / rate_scale)
                 * (rate_bottom - rate_top),
-                COLORS["amber"],
+                COLORS["violet"],
             )
         if five_hour_rate_points:
             draw_recorded_segments(
@@ -3227,7 +3365,7 @@ class UsageApp:
                 lambda point: rate_top
                 + ((rate_scale - clamp(point["rate_per_hour"], 0, rate_scale)) / rate_scale)
                 * (rate_bottom - rate_top),
-                COLORS["coral"],
+                COLORS["cyan"],
             )
         if not rate_points and not five_hour_rate_points:
             canvas.create_text((left + right) / 2, (rate_top + rate_bottom) / 2, text="More samples are needed to estimate a trend rate.", fill=COLORS["muted"], font=("Segoe UI", 10))
