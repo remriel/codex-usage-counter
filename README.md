@@ -1,56 +1,94 @@
 # Codex Usage Counter
 
-A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, reset countdowns, and token activity.
+## See your Codex limits at a glance
 
-[Download the latest Windows release](../../releases/latest)
+Codex Usage Counter is a small Windows app that shows how much of your Codex allowance you have used, how much is left, and how quickly you are using it.
 
-## What it does
+The current number is always available in the Windows notification area, so you can check it without opening a dashboard or guessing when you will hit a limit.
 
-- Shows independent 5-hour and weekly Codex allowance percentages, reset countdowns, pace, and ETA.
-- Tracks current-task input, cached-input, output, reasoning, total, and last-response token counts from local Codex aggregate telemetry.
-- Refreshes within about a second when an already-discovered active Codex session file changes; configurable polling remains the fallback.
-- Displays the most constrained allowance directly in the notification-area tray icon, so the number is useful without hovering; the tooltip identifies both windows.
-- Shows a custom in-app tray milestone popup above the Windows notification area; it does not use Windows toast or balloon notifications.
-- Polls local usage every two minutes by default; every automatic read refreshes usage, rate, and ETA together, while **Refresh now** reads immediately outside that schedule.
-- Supports Used or Remaining display mode, always-on-top behavior, optional Start with Windows behavior, optional custom milestone chime, configurable polling, trigger percentage, and popup duration.
-- Keeps minute-level usage history with 1-hour, 3-hour, 12-hour, 24-hour, 48-hour, 4-day, 7-day, and 30-day overlapping usage/rate graphs; Statistics opens to the 1-hour view by default.
-- Adds a stock-chart-style **Daily** interval with one bar per local calendar day, reset-aware daily 5-hour and weekly totals, daily average/peak rates, and daily token totals.
-- Opens Statistics as a fullscreen view with a responsive, edge-to-edge chart canvas.
-- Keeps matching 5-hour and weekly cards side by side and updates those cards when a minute or daily point is clicked, dragged across, or selected with the mouse wheel.
-- Provides paired 5-hour and weekly usage bars, separate rate lines, token activity, observed tokens per allowance point, ETA, reset-aware regression, and time-series statistics.
+[Download the latest Windows version](../../releases/latest)
+
+## What the numbers mean
+
+| On the screen | In plain English |
+| --- | --- |
+| **5-hour used** | How much of your short-term Codex allowance you have used. |
+| **Weekly used** | How much of your weekly Codex allowance you have used. |
+| **Remaining** | How much allowance is still available. |
+| **Pace** | How fast your usage is increasing. |
+| **ETA to limit** | An estimate of when you could reach the limit if you keep using Codex at the same pace. |
+| **Reset** | When that allowance becomes available again. |
+| **Tray number** | The more urgent of your current limits, visible without hovering. |
+
+The app also shows token activity for the current Codex task. Tokens are a rough measure of how much text and reasoning Codex is processing; they are useful for spotting busy tasks, but they are not a replacement for the official usage percentage.
+
+## Why it is useful
+
+- Check your short-term and weekly allowance without interrupting your work.
+- See whether you are spending usage slowly or quickly.
+- Get a rough time estimate before reaching a limit.
+- Notice reset times before starting a long task.
+- Look back at your history to see when usage was highest.
+- Keep the app running quietly in the notification area.
+
+## See it in action
+
+### The counter window
+
+![Codex Usage Counter showing 5-hour and weekly usage, remaining allowance, pace, reset times, ETA, and token activity](screenshots/counter.png)
+
+### The Statistics page
+
+![Codex Usage Counter Statistics showing continuous filled usage history, separate pace lines, and token activity](screenshots/statistics.png)
+
+The Statistics page keeps the main ideas separate so they are easier to read:
+
+- **Usage** is shown as filled history blocks for the 5-hour and weekly limits.
+- **Pace** is shown as two lines so you can see how quickly usage is changing.
+- **Token activity** is shown below as its own signal.
+- Click, drag, or scroll through the chart to make the cards show a specific point in time.
+- Choose 1 hour, 3 hours, 12 hours, 24 hours, 48 hours, 4 days, 7 days, 30 days, or Daily.
 
 ## Quick start on Windows
 
 1. Download `CodexUsageCounter.exe` from the [latest release](../../releases/latest).
-2. Run it. The app starts in the notification area and opens its counter window.
-3. Use **Settings** to choose Used or Remaining, enable or disable Start with Windows, and adjust polling or milestone behavior.
-4. To start it with Windows, run `install-startup.ps1` from the downloaded package, or use the packaged app path when prompted.
+2. Run it. The counter window opens, and the current number appears in the notification area.
+3. Open **Settings** if you want to choose Used or Remaining, change how often it checks, enable Start with Windows, or adjust the milestone sound and popup.
 
-The executable is self-contained and does not require Python to be installed.
+The downloaded app is self-contained. You do not need to install Python.
 
-## Screenshots
+## How it works
 
-### Counter window
+Codex saves small summary records on your computer. This app reads those records to find the 5-hour and weekly allowance values and to build a local history.
 
-![Codex Usage Counter showing separate 5-hour and weekly allowance cards, rates, ETAs, and token activity](screenshots/counter.png)
+It identifies the two limits by their time window: 5 hours and 7 days. This keeps the display correct even if Codex changes the order in which it reports them.
 
-### Statistics view
+The app checks for new information every two minutes by default. It can also notice a changed active session sooner. **Refresh now** always performs an immediate check outside the normal schedule.
 
-![Codex Usage Counter Statistics showing paired 5-hour and weekly usage bars, rate lines, and token activity](screenshots/statistics.png)
+The estimates are intentionally simple: they use the usage history available on your computer. A busy task, cached context, model choice, or delayed usage update can change the real pace, so the official Codex usage dashboard remains the authoritative source.
 
-## How the data is read
+## Privacy
 
-The counter reads aggregate `rate_limits` and `token_count` events from JSONL files under:
+The app reads local summary data only. It does not read or send:
 
-```text
-%USERPROFILE%\.codex\sessions
+- Your conversations.
+- API keys, passwords, or cookies.
+- Browser data.
+- `auth.json`.
+
+The usage dashboard button opens the official dashboard in your browser when you want the authoritative account view.
+
+## Start with Windows
+
+You can enable or disable **Start with Windows** in Settings.
+
+When building from source, the startup shortcut can also be installed with:
+
+```powershell
+.\install-startup.ps1
 ```
 
-The reader identifies allowance windows by their reported duration: 300 minutes for the 5-hour limit and 10,080 minutes for the weekly limit. It does not assume `primary` always means weekly, so both windows remain correct if their field positions change. Historical weekly samples remain available; the 5-hour line begins when Codex first reports that window and is not fabricated for earlier periods.
-
-It does not read `auth.json`, API keys, cookies, browser profiles, or conversation content. Token totals are scoped to the currently active local Codex task. Token-to-percentage statistics are observed relationships, not fixed conversions: model behavior, caching, reasoning, concurrent tasks, and delayed allowance reporting can change them. The usage dashboard link opens the official dashboard for the authoritative view. Because the counter is based on local session telemetry, it can show a stale signal until a newer Codex event is written; **Refresh now** forces an immediate local read.
-
-Closing the window hides it to the tray. Use the tray menu’s **Quit** command to exit.
+Use `-Remove` to remove the current-user startup shortcut.
 
 ## Run from source
 
@@ -58,7 +96,7 @@ Closing the window hides it to the tray. Use the tray menu’s **Quit** command 
 python .\codex_usage_counter.py
 ```
 
-The source app uses Python’s built-in Tk interface and Windows APIs for the tray icon. It has no third-party runtime dependency.
+The source app uses Python's built-in Tk interface and Windows APIs for the notification-area tray icon.
 
 ## Build a standalone executable
 
@@ -69,14 +107,4 @@ python -m pip install pyinstaller
 .\build.ps1
 ```
 
-The build script regenerates the numeric tray icon set in `assets\taskbar` and creates `dist\CodexUsageCounter.exe` with PyInstaller.
-
-## Start with Windows
-
-After building, run:
-
-```powershell
-.\install-startup.ps1
-```
-
-Use `-Remove` to remove the current-user Startup shortcut.
+The build creates `dist\CodexUsageCounter.exe`. The executable is self-contained and does not require Python on the computer where it is run.

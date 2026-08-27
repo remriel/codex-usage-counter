@@ -82,7 +82,9 @@ Make Statistics visually cohesive and immediately understandable after the usage
 - Continuity QA verified that every adjacent regular 5-hour and weekly usage block meets or overlaps by at most Canvas rounding, selected-point markers still render, and each recorded Daily bar fills its complete 17-pixel calendar-day slot. Missing Daily dates remain blank rather than fabricating totals.
 - The final PyInstaller artifact was installed over the prior unversioned executable. Installed/build SHA-256 hashes match (`576F5FC23FA3671B901015F8A062006C213B8C8E76C23D10E1986CC8111C0348`), and the normal two-process packaged app launched successfully.
 - The previous installed executable was replaced. A fresh scan found no other versioned `CodexUsageCounter-v*` executables or source archives on Desktop, Downloads, Documents, or in the project outputs, so no additional files required removal.
+- Refreshed `screenshots\counter.png` and `screenshots\statistics.png` from the current UI using the physical Windows window bounds; the counter capture includes live 5-hour/weekly values and the Statistics capture includes the three-pane continuous usage layout.
+- Rewrote `README.md` in plain language with a visual-first feature explanation, screenshot captions, quick start, privacy summary, and build instructions.
 
 ## Next steps
 
-1. Commit and push the verified redesign. Create a numbered downloadable release only when explicitly requested.
+1. Commit and push the refreshed screenshots and plain-language README. Update the GitHub repository description to match.
