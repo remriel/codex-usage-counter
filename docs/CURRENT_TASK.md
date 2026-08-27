@@ -84,6 +84,7 @@ Make Statistics visually cohesive and immediately understandable after the usage
 - The previous installed executable was replaced. A fresh scan found no other versioned `CodexUsageCounter-v*` executables or source archives on Desktop, Downloads, Documents, or in the project outputs, so no additional files required removal.
 - Refreshed `screenshots\counter.png` and `screenshots\statistics.png` from the current UI using the physical Windows window bounds; the counter capture includes live 5-hour/weekly values and the Statistics capture includes the three-pane continuous usage layout.
 - Rewrote `README.md` in plain language with a visual-first feature explanation, screenshot captions, quick start, privacy summary, and build instructions.
+- Returned the public README and GitHub repository tagline to a concise, conventional project description at the user’s request; the refreshed screenshots were kept unchanged.
 
 ## Next steps
 
