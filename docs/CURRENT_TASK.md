@@ -22,6 +22,7 @@ Make Statistics visually cohesive and immediately understandable after the usage
 - Usage bars now occupy two directly labeled small-multiple lanes inside one Usage pane: 5-hour above Weekly, both using the same scale and time axis.
 - Cyan consistently identifies 5-hour data, violet identifies weekly data, and mint identifies token data across cards, bars, pace lines, and selection markers.
 - Usage cards have stronger value typography than pace and token cards; pane headings contain their own direct series keys, removing the detached color legend.
+- Daily Pace now uses two directly labeled zero-baseline lanes with independently rounded scales: 5-hour average pace and weekly average pace. This keeps the values in points per hour while making the smaller weekly day-to-day changes legible instead of flattening them against the regular 0–20/hour scale.
 
 ## Decisions
 
@@ -42,6 +43,7 @@ Make Statistics visually cohesive and immediately understandable after the usage
 - Keep bars for usage, but use aligned series lanes rather than alternating paired bars at each timestamp; this preserves the requested bar encoding without turning dense history into visual texture.
 - Use series identity—not metric type—as the persistent color role. Pace is distinguished by its line mark and pane position, not unrelated coral/amber hues.
 - Render usage lanes as contiguous step-filled blocks: adjacent recorded time bins share an edge and fill from zero to the recorded value. Forward-fill known 5-hour values across later recorded bins, but do not invent values before 5-hour telemetry begins. Daily bars fill their complete calendar-day slot while missing days remain blank.
+- In Daily Pace only, scale each allowance independently from zero with modest headroom and directly display its scale in its own lane. Use the same scale/lane map for the rendered daily line, daily point markers, and selected-point marker.
 
 ## Relevant files
 
@@ -85,6 +87,9 @@ Make Statistics visually cohesive and immediately understandable after the usage
 - Refreshed `screenshots\counter.png` and `screenshots\statistics.png` from the current UI using the physical Windows window bounds; the counter capture includes live 5-hour/weekly values and the Statistics capture includes the three-pane continuous usage layout.
 - Rewrote `README.md` in plain language with a visual-first feature explanation, screenshot captions, quick start, privacy summary, and build instructions.
 - Returned the public README and GitHub repository tagline to a concise, conventional project description at the user’s request; the refreshed screenshots were kept unchanged.
+- A synthetic Daily Canvas render with weekly rates from 0.12 to 0.84 points/hour and 5-hour rates from 4 to 18 verified distinct daily scales (1.0 vs 25.0), 24.2 pixels of weekly vertical movement, four weekly markers, and aligned selected-point markers. `python -m py_compile codex_usage_counter.py` and `git diff --check` passed.
+- A fresh PyInstaller production build completed successfully. The installed `outputs\CodexUsageCounter\CodexUsageCounter.exe` SHA-256 matches the build (`74178B88D651346E36400FC1AF3AED073204C30FB7E318294E52B3A52D325165`) and the normal two-process packaged app launched successfully.
+- Moved two confirmed legacy delivery folders to the Recycle Bin: `outputs\release-v1.1.17` and `2026-08-09\https-github-com-remriel-codex-usage\outputs`. The first contained the old v1.1.17 executable/source archive; the second contained an older unversioned executable/source archive and its checksum. A fresh Desktop, Downloads, Documents, and current outputs scan found only the newly installed current executable.
 
 ## Next steps
 
