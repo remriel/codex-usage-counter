@@ -23,6 +23,7 @@ Make Statistics visually cohesive and immediately understandable after the usage
 - Cyan consistently identifies 5-hour data, violet identifies weekly data, and mint identifies token data across cards, bars, pace lines, and selection markers.
 - Usage cards have stronger value typography than pace and token cards; pane headings contain their own direct series keys, removing the detached color legend.
 - Daily Pace now uses two directly labeled zero-baseline lanes with independently rounded scales: 5-hour average pace and weekly average pace. Every Daily series—usage, pace, and token activity—uses full-day bars with no connected data lines. This keeps the values in points per hour while making the smaller weekly day-to-day changes legible instead of flattening them against the regular 0–20/hour scale.
+- Statistics now uses compact 42-pixel card rows with tighter gaps and a shared plot origin of `y=192` rather than `y=266`. Both Daily and intraday views retain all 12 cards while giving the three chart panes 74 additional pixels of vertical height.
 
 ## Decisions
 
@@ -44,6 +45,7 @@ Make Statistics visually cohesive and immediately understandable after the usage
 - Use series identity—not metric type—as the persistent color role. Pace is distinguished by its line mark and pane position, not unrelated coral/amber hues.
 - Render usage lanes as contiguous step-filled blocks: adjacent recorded time bins share an edge and fill from zero to the recorded value. Forward-fill known 5-hour values across later recorded bins, but do not invent values before 5-hour telemetry begins. Daily bars fill their complete calendar-day slot while missing days remain blank.
 - In Daily Pace only, scale each allowance independently from zero with modest headroom and directly display its scale in its own lane. Use the same scale/lane map for the rendered daily bars and selected-point marker; keep every Daily metric bar-based and do not draw connected data lines.
+- Keep summary-card geometry centralized and shared between Daily and intraday renderers so chart-space allocation, hierarchy, and selection behavior stay consistent across every Statistics interval.
 
 ## Relevant files
 
@@ -92,6 +94,8 @@ Make Statistics visually cohesive and immediately understandable after the usage
 - Moved two confirmed legacy delivery folders to the Recycle Bin: `outputs\release-v1.1.17` and `2026-08-09\https-github-com-remriel-codex-usage\outputs`. The first contained the old v1.1.17 executable/source archive; the second contained an older unversioned executable/source archive and its checksum. A fresh Desktop, Downloads, Documents, and current outputs scan found only the newly installed current executable.
 - A synthetic Daily Canvas render verified four 5-hour pace bars, four weekly pace bars, and four token bars with adjacent weekly bar boundaries, zero connected daily-rate lines or point marks, and five selected-value overlays (two usage, two pace, one token). `python -m py_compile codex_usage_counter.py` and `git diff --check` passed.
 - The all-bars Daily production build was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`; its SHA-256 matches the current build (`746A61C0B2FC169B76BFC3F5EE53B07795409EFDF2949F0E233FC88D6F7BE3C9`) and the normal two-process packaged app launched successfully. A fresh delivery scan found no versioned or otherwise separate older executable/archive—only the current installed executable and its current source-build output remain.
+- A synthetic Daily Canvas render confirmed that compact card text ends at `y=140`, the first chart pane starts at `y=192`, and the chart region gained 74 pixels without overlap. The Daily weekly pace bars still render at the new shared geometry. `python -m py_compile codex_usage_counter.py` and `git diff --check` passed.
+- The compact-card/taller-chart production build was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`; its SHA-256 matches the current build (`66CAC57F4ED95DDB1BA0CE162AC2C3F15EF2EB688636A0C080FA1A3D6405DE53`) and the normal two-process packaged app launched successfully. The replacement happened in place; a fresh delivery scan found no versioned or separately named previous executable/archive.
 
 ## Next steps
 
