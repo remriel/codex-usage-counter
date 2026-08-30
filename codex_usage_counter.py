@@ -2434,16 +2434,17 @@ class UsageApp:
         )
         fraction = (selected["timestamp"] - self.stats_plot_start) / max(1, self.stats_plot_end - self.stats_plot_start)
         x = self.stats_plot_left + clamp(fraction, 0, 1) * (self.stats_plot_right - self.stats_plot_left)
-        canvas.create_line(
-            x,
-            self.stats_usage_top - 6,
-            x,
-            max(self.stats_rate_bottom, self.stats_token_bottom) + 4,
-            fill=COLORS["soft"],
-            dash=(4, 3),
-            width=1,
-            tags="stats-selection",
-        )
+        if not self.stats_daily_view:
+            canvas.create_line(
+                x,
+                self.stats_usage_top - 6,
+                x,
+                max(self.stats_rate_bottom, self.stats_token_bottom) + 4,
+                fill=COLORS["soft"],
+                dash=(4, 3),
+                width=1,
+                tags="stats-selection",
+            )
         used = selected.get("used_percent")
         five_hour_used = selected.get("five_hour_used_percent")
         rate = selected.get("rate_per_hour")
@@ -3076,7 +3077,6 @@ class UsageApp:
             daily_rate_scales,
         )
 
-        day_slot = (right - left) / HISTORY_RETENTION_DAYS
         for point in daily_points:
             day_start = number(point.get("day_start"))
             if day_start is None:
@@ -3103,53 +3103,33 @@ class UsageApp:
                     tags=("stats-usage-bar", tag),
                 )
 
-        def draw_daily_rate(field: str, color: str, lane_key: str) -> None:
-            coordinates: list[float] = []
-            previous_day: Optional[float] = None
+        def draw_daily_rate_bars(field: str, color: str, lane_key: str) -> None:
+            """Use one full-width bar per recorded day; Daily has no connected trend lines."""
+
             lane_top, lane_bottom = daily_rate_lanes[lane_key]
             rate_scale = daily_rate_scales[lane_key]
             for point in daily_points:
                 value = number(point.get(field))
                 day_start = number(point.get("day_start"))
                 if value is None or day_start is None:
-                    if len(coordinates) >= 4:
-                        canvas.create_line(*coordinates, fill=color, width=3)
-                    coordinates = []
-                    previous_day = None
                     continue
-                if previous_day is not None and day_start - previous_day > 36 * 60 * 60:
-                    if len(coordinates) >= 4:
-                        canvas.create_line(
-                            *coordinates,
-                            fill=color,
-                            width=3,
-                            tags=("stats-daily-rate-line", f"stats-{lane_key}-daily-rate-line"),
-                        )
-                    coordinates = []
+                day_local = datetime.fromtimestamp(day_start).astimezone()
+                next_day_start = (day_local + timedelta(days=1)).timestamp()
+                bar_left = x_for(day_start)
+                bar_right = x_for(next_day_start)
                 y = lane_top + ((rate_scale - clamp(value, 0, rate_scale)) / rate_scale) * (lane_bottom - lane_top)
-                x = x_for(point["timestamp"])
-                coordinates.extend((x, y))
-                canvas.create_oval(
-                    x - 2.5,
-                    y - 2.5,
-                    x + 2.5,
-                    y + 2.5,
+                canvas.create_rectangle(
+                    bar_left,
+                    y,
+                    bar_right + 0.5,
+                    lane_bottom,
                     fill=color,
-                    outline=COLORS["ink"],
-                    width=1,
-                    tags=("stats-daily-rate-point", f"stats-{lane_key}-daily-rate-point"),
-                )
-                previous_day = day_start
-            if len(coordinates) >= 4:
-                canvas.create_line(
-                    *coordinates,
-                    fill=color,
-                    width=3,
-                    tags=("stats-daily-rate-line", f"stats-{lane_key}-daily-rate-line"),
+                    outline="",
+                    tags=("stats-daily-rate-bar", f"stats-{lane_key}-daily-rate-bar"),
                 )
 
-        draw_daily_rate("five_hour_rate_per_hour", COLORS["cyan"], "five_hour")
-        draw_daily_rate("rate_per_hour", COLORS["violet"], "weekly")
+        draw_daily_rate_bars("five_hour_rate_per_hour", COLORS["cyan"], "five_hour")
+        draw_daily_rate_bars("rate_per_hour", COLORS["violet"], "weekly")
         if not daily_points:
             canvas.create_text(
                 (left + right) / 2,
@@ -3186,12 +3166,25 @@ class UsageApp:
         canvas.create_line(left, token_bottom, right, token_bottom, fill=COLORS["soft"], width=2)
         canvas.create_text(canvas_width - 10, token_top, text=format_token_count(token_scale), anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         canvas.create_text(canvas_width - 10, token_bottom, text="0", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
-        token_bar_width = max(2.0, min(18.0, day_slot * 0.55))
         for point in daily_points:
+            day_start = number(point.get("day_start"))
+            if day_start is None:
+                continue
+            day_local = datetime.fromtimestamp(day_start).astimezone()
+            next_day_start = (day_local + timedelta(days=1)).timestamp()
+            bar_left = x_for(day_start)
+            bar_right = x_for(next_day_start)
             total = number(point.get("daily_total_tokens")) or 0.0
-            x = x_for(point["timestamp"])
             y = token_top + ((token_scale - clamp(total, 0, token_scale)) / token_scale) * (token_bottom - token_top)
-            canvas.create_rectangle(x - token_bar_width / 2, y, x + token_bar_width / 2, token_bottom, fill=COLORS["mint"], outline="")
+            canvas.create_rectangle(
+                bar_left,
+                y,
+                bar_right + 0.5,
+                token_bottom,
+                fill=COLORS["mint"],
+                outline="",
+                tags="stats-daily-token-bar",
+            )
 
         def axis_label(epoch: float) -> str:
             return datetime.fromtimestamp(epoch).astimezone().strftime("%b %d")
