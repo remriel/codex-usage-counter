@@ -117,6 +117,34 @@ def clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
+def nice_positive_scale(maximum: float) -> float:
+    """Choose a compact, zero-based chart scale with modest headroom."""
+
+    if not math.isfinite(maximum) or maximum <= 0:
+        return 1.0
+    target = maximum * 1.12
+    magnitude = 10 ** math.floor(math.log10(target))
+    for multiplier in (1.0, 2.0, 2.5, 5.0, 10.0):
+        candidate = multiplier * magnitude
+        if candidate >= target:
+            return candidate
+    return 10.0 * magnitude
+
+
+def format_rate_axis(value: float, scale: float) -> str:
+    """Format a pace-axis tick without hiding small but meaningful rates."""
+
+    if scale >= 10:
+        decimals = 0
+    elif scale >= 1:
+        decimals = 1
+    elif scale >= 0.1:
+        decimals = 2
+    else:
+        decimals = 3
+    return f"+{value:.{decimals}f}/hr"
+
+
 def number(value: Any) -> Optional[float]:
     try:
         if value is None or value == "":
@@ -1588,6 +1616,11 @@ class UsageApp:
         self.stats_rate_top = 343
         self.stats_rate_bottom = 508
         self.stats_rate_scale = 1.0
+        self.stats_daily_rate_scales: dict[str, float] = {"five_hour": 1.0, "weekly": 1.0}
+        self.stats_daily_rate_lanes: dict[str, tuple[float, float]] = {
+            "five_hour": (343.0, 421.0),
+            "weekly": (429.0, 508.0),
+        }
         self.stats_usage_scale = 100.0
         self.stats_token_top = 0
         self.stats_token_bottom = 0
@@ -2447,14 +2480,21 @@ class UsageApp:
                     width=2,
                     tags="stats-selection",
                 )
-            for value, color in ((rate, COLORS["violet"]), (five_hour_rate, COLORS["cyan"])):
+            for value, color, lane_key in (
+                (rate, COLORS["violet"], "weekly"),
+                (five_hour_rate, COLORS["cyan"], "five_hour"),
+            ):
                 plotted_rate = number(value)
-                if plotted_rate is None or self.stats_rate_scale <= 0:
+                rate_scale = self.stats_daily_rate_scales.get(lane_key, self.stats_rate_scale)
+                lane_top, lane_bottom = self.stats_daily_rate_lanes.get(
+                    lane_key,
+                    (self.stats_rate_top, self.stats_rate_bottom),
+                )
+                if plotted_rate is None or rate_scale <= 0:
                     continue
-                rate_y = self.stats_rate_top + (
-                    (self.stats_rate_scale - clamp(plotted_rate, 0, self.stats_rate_scale))
-                    / self.stats_rate_scale
-                ) * (self.stats_rate_bottom - self.stats_rate_top)
+                rate_y = lane_top + (
+                    (rate_scale - clamp(plotted_rate, 0, rate_scale)) / rate_scale
+                ) * (lane_bottom - lane_top)
                 canvas.create_oval(
                     x - 5,
                     rate_y - 5,
@@ -2790,6 +2830,68 @@ class UsageApp:
         self.stats_weekly_usage_top, self.stats_weekly_usage_bottom = lanes["weekly"]
         return lanes
 
+    def _draw_statistics_daily_rate_lanes(
+        self,
+        canvas: tk.Canvas,
+        left: float,
+        right: float,
+        top: float,
+        bottom: float,
+        scales: dict[str, float],
+    ) -> dict[str, tuple[float, float]]:
+        """Draw daily pace as two independently scaled, directly labeled lanes."""
+
+        lanes = self._statistics_usage_lanes(top, bottom)
+        self.stats_daily_rate_lanes = lanes
+        self.stats_daily_rate_scales = {
+            key: max(0.0001, float(scales.get(key, 1.0)))
+            for key in ("five_hour", "weekly")
+        }
+        for key, label, color in (
+            ("five_hour", "5H AVG", COLORS["cyan"]),
+            ("weekly", "WEEK AVG", COLORS["violet"]),
+        ):
+            lane_top, lane_bottom = lanes[key]
+            scale = self.stats_daily_rate_scales[key]
+            canvas.create_rectangle(
+                left,
+                lane_top,
+                right,
+                lane_bottom,
+                fill=COLORS["panel_raised"],
+                outline=COLORS["line"],
+                width=1,
+                tags=("stats-daily-rate-lane", f"stats-{key}-daily-rate-lane"),
+            )
+            canvas.create_text(
+                left - 10,
+                (lane_top + lane_bottom) / 2,
+                text=label,
+                anchor="e",
+                fill=color,
+                font=("Segoe UI", 8, "bold"),
+            )
+            midpoint_y = lane_bottom - 0.5 * (lane_bottom - lane_top)
+            canvas.create_line(left, midpoint_y, right, midpoint_y, fill=COLORS["line"], dash=(3, 5))
+            canvas.create_line(left, lane_bottom, right, lane_bottom, fill=COLORS["soft"], width=1)
+            canvas.create_text(
+                right - 6,
+                lane_top + 2,
+                text=format_rate_axis(scale, scale),
+                anchor="ne",
+                fill=COLORS["muted"],
+                font=("Segoe UI", 7),
+            )
+            canvas.create_text(
+                right - 6,
+                lane_bottom - 2,
+                text="0/hr",
+                anchor="se",
+                fill=COLORS["muted"],
+                font=("Segoe UI", 7),
+            )
+        return lanes
+
     def _render_daily_statistics(self) -> None:
         """Render one stock-chart-style bar per local calendar day."""
 
@@ -2945,20 +3047,34 @@ class UsageApp:
             " pts",
         )
 
-        rate_values = [
-            value
-            for point in daily_points
-            for value in (number(point.get("rate_per_hour")), number(point.get("five_hour_rate_per_hour")))
-            if value is not None and math.isfinite(value)
-        ]
-        observed_rate_max = max(rate_values, default=0.0)
-        rate_scale = max(20.0, math.ceil(observed_rate_max / 20.0) * 20.0)
-        self.stats_rate_scale = rate_scale
-        for value in (rate_scale, rate_scale / 2, 0):
-            y = rate_top + ((rate_scale - value) / rate_scale) * (rate_bottom - rate_top)
-            canvas.create_line(left, y, right, y, fill=COLORS["soft"] if value == 0 else COLORS["line"], width=2 if value == 0 else 1)
-            sign = "+" if value > 0 else ""
-            canvas.create_text(canvas_width - 10, y, text=f"{sign}{value:.0f}/hr", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+        daily_rate_values = {
+            "five_hour": [
+                value
+                for point in daily_points
+                if (value := number(point.get("five_hour_rate_per_hour"))) is not None and math.isfinite(value)
+            ],
+            "weekly": [
+                value
+                for point in daily_points
+                if (value := number(point.get("rate_per_hour"))) is not None and math.isfinite(value)
+            ],
+        }
+        daily_rate_scales = {
+            key: nice_positive_scale(max(values, default=0.0))
+            for key, values in daily_rate_values.items()
+        }
+        # The Daily view compares change over time within each allowance.  Its two
+        # rates live on very different orders of magnitude, so sharing the regular
+        # 0–20/hour scale flattens the weekly series beyond recognition.
+        self.stats_rate_scale = max(daily_rate_scales.values(), default=1.0)
+        daily_rate_lanes = self._draw_statistics_daily_rate_lanes(
+            canvas,
+            left,
+            right,
+            rate_top,
+            rate_bottom,
+            daily_rate_scales,
+        )
 
         day_slot = (right - left) / HISTORY_RETENTION_DAYS
         for point in daily_points:
@@ -2987,9 +3103,11 @@ class UsageApp:
                     tags=("stats-usage-bar", tag),
                 )
 
-        def draw_daily_rate(field: str, color: str) -> None:
+        def draw_daily_rate(field: str, color: str, lane_key: str) -> None:
             coordinates: list[float] = []
             previous_day: Optional[float] = None
+            lane_top, lane_bottom = daily_rate_lanes[lane_key]
+            rate_scale = daily_rate_scales[lane_key]
             for point in daily_points:
                 value = number(point.get(field))
                 day_start = number(point.get("day_start"))
@@ -3001,16 +3119,37 @@ class UsageApp:
                     continue
                 if previous_day is not None and day_start - previous_day > 36 * 60 * 60:
                     if len(coordinates) >= 4:
-                        canvas.create_line(*coordinates, fill=color, width=3)
+                        canvas.create_line(
+                            *coordinates,
+                            fill=color,
+                            width=3,
+                            tags=("stats-daily-rate-line", f"stats-{lane_key}-daily-rate-line"),
+                        )
                     coordinates = []
-                y = rate_top + ((rate_scale - clamp(value, 0, rate_scale)) / rate_scale) * (rate_bottom - rate_top)
-                coordinates.extend((x_for(point["timestamp"]), y))
+                y = lane_top + ((rate_scale - clamp(value, 0, rate_scale)) / rate_scale) * (lane_bottom - lane_top)
+                x = x_for(point["timestamp"])
+                coordinates.extend((x, y))
+                canvas.create_oval(
+                    x - 2.5,
+                    y - 2.5,
+                    x + 2.5,
+                    y + 2.5,
+                    fill=color,
+                    outline=COLORS["ink"],
+                    width=1,
+                    tags=("stats-daily-rate-point", f"stats-{lane_key}-daily-rate-point"),
+                )
                 previous_day = day_start
             if len(coordinates) >= 4:
-                canvas.create_line(*coordinates, fill=color, width=3)
+                canvas.create_line(
+                    *coordinates,
+                    fill=color,
+                    width=3,
+                    tags=("stats-daily-rate-line", f"stats-{lane_key}-daily-rate-line"),
+                )
 
-        draw_daily_rate("five_hour_rate_per_hour", COLORS["cyan"])
-        draw_daily_rate("rate_per_hour", COLORS["violet"])
+        draw_daily_rate("five_hour_rate_per_hour", COLORS["cyan"], "five_hour")
+        draw_daily_rate("rate_per_hour", COLORS["violet"], "weekly")
         if not daily_points:
             canvas.create_text(
                 (left + right) / 2,
