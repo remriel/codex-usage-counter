@@ -163,6 +163,22 @@ def number(value: Any) -> Optional[float]:
         return None
 
 
+def metadata_text(value: Any) -> Optional[str]:
+    """Keep a short, non-content session metadata value when it is present."""
+
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned[:80] if cleaned else None
+
+
+def format_model_effort(model: Any, effort: Any) -> str:
+    """Format the active execution context without exposing session content."""
+
+    values = [metadata_text(model), metadata_text(effort)]
+    return " · ".join(value for value in values if value) or "context unavailable"
+
+
 def parse_timestamp(value: Any) -> Optional[float]:
     if isinstance(value, (int, float)):
         return float(value)
@@ -340,6 +356,12 @@ class UsageHistory:
         session_id = item.get("session_id")
         if isinstance(session_id, str) and session_id:
             point["session_id"] = session_id
+        model = metadata_text(item.get("model"))
+        effort = metadata_text(item.get("reasoning_effort"))
+        if model is not None:
+            point["model"] = model
+        if effort is not None:
+            point["reasoning_effort"] = effort
         return point
 
     @staticmethod
@@ -398,7 +420,11 @@ class UsageHistory:
                     and previous.get("five_hour_window_minutes") == point.get("five_hour_window_minutes")
                 )
                 same_session = previous.get("session_id") == point.get("session_id")
-                if same_minute and same_usage and same_reset and same_window and same_five_hour and same_session:
+                same_context = (
+                    previous.get("model") == point.get("model")
+                    and previous.get("reasoning_effort") == point.get("reasoning_effort")
+                )
+                if same_minute and same_usage and same_reset and same_window and same_five_hour and same_session and same_context:
                     ordered[-1] = point
                     continue
             ordered.append(point)
@@ -465,6 +491,10 @@ class UsageHistory:
                 point[field] = float(value)
         if snapshot.source_path:
             point["session_id"] = Path(snapshot.source_path).stem
+        if snapshot.model:
+            point["model"] = snapshot.model
+        if snapshot.reasoning_effort:
+            point["reasoning_effort"] = snapshot.reasoning_effort
 
         point_bucket = int(timestamp // 60)
         started_new_bucket = not self.points
@@ -667,10 +697,74 @@ class UsageHistory:
             last_tokens = number(day_points[-1].get("last_tokens"))
             if last_tokens is not None:
                 point["last_tokens"] = last_tokens
+            last_model = next((metadata_text(item.get("model")) for item in reversed(day_points) if metadata_text(item.get("model"))), None)
+            last_effort = next(
+                (metadata_text(item.get("reasoning_effort")) for item in reversed(day_points) if metadata_text(item.get("reasoning_effort"))),
+                None,
+            )
+            if last_model is not None:
+                point["model"] = last_model
+            if last_effort is not None:
+                point["reasoning_effort"] = last_effort
             daily_points.append(point)
         self._daily_cache_key = cache_key
         self._daily_cache = daily_points
         return daily_points
+
+    def weekly_statistics(self, days: int = HISTORY_RETENTION_DAYS) -> list[dict[str, Any]]:
+        """Aggregate the daily history into local calendar weeks for the Weekly view."""
+
+        daily_points = self.daily_statistics(days)
+        if not daily_points:
+            return []
+
+        def week_start_for(timestamp: float) -> float:
+            local = datetime.fromtimestamp(timestamp).astimezone()
+            day_start = local.replace(hour=0, minute=0, second=0, microsecond=0)
+            return (day_start - timedelta(days=day_start.weekday())).timestamp()
+
+        def mean(values: list[float]) -> Optional[float]:
+            return sum(values) / len(values) if values else None
+
+        buckets: dict[float, list[dict[str, Any]]] = {}
+        for point in daily_points:
+            day_start = number(point.get("day_start"))
+            if day_start is not None:
+                buckets.setdefault(week_start_for(day_start), []).append(point)
+
+        weekly_points: list[dict[str, Any]] = []
+        for week_start in sorted(buckets):
+            week_points = buckets[week_start]
+            week_end = week_start_for(week_start + 7 * 24 * 60 * 60 - 1) + 7 * 24 * 60 * 60
+
+            def values_for(field: str) -> list[float]:
+                return [value for item in week_points if (value := number(item.get(field))) is not None]
+
+            point: dict[str, Any] = {
+                "timestamp": week_start + (week_end - week_start) / 2,
+                "week_start": week_start,
+                "weekly": True,
+                "used_percent": sum(values_for("used_percent")),
+                "five_hour_used_percent": sum(values_for("five_hour_used_percent")),
+                "daily_weekly_average": mean(values_for("daily_weekly_average")),
+                "daily_five_hour_average": mean(values_for("daily_five_hour_average")),
+                "rate_per_hour": mean(values_for("rate_per_hour")),
+                "five_hour_rate_per_hour": mean(values_for("five_hour_rate_per_hour")),
+                "daily_weekly_peak_rate": max(values_for("daily_weekly_peak_rate"), default=None),
+                "daily_five_hour_peak_rate": max(values_for("daily_five_hour_peak_rate"), default=None),
+                "daily_total_tokens": sum(values_for("daily_total_tokens")),
+                "total_tokens": sum(values_for("daily_total_tokens")),
+                "token_rate_per_minute": mean(values_for("token_rate_per_minute")),
+                "daily_peak_token_rate": max(values_for("daily_peak_token_rate"), default=None),
+                "daily_samples": sum(int(number(item.get("daily_samples")) or 0) for item in week_points),
+                "daily_span_seconds": sum(number(item.get("daily_span_seconds")) or 0.0 for item in week_points),
+            }
+            for field in ("last_tokens", "model", "reasoning_effort"):
+                value = next((item.get(field) for item in reversed(week_points) if item.get(field) is not None), None)
+                if value is not None:
+                    point[field] = value
+            weekly_points.append(point)
+        return weekly_points
 
     @staticmethod
     def _slope(points: list[dict[str, Any]]) -> Optional[float]:
@@ -864,6 +958,8 @@ class UsageSnapshot:
     total_tokens: Optional[float] = None
     last_tokens: Optional[float] = None
     context_window: Optional[float] = None
+    model: Optional[str] = None
+    reasoning_effort: Optional[str] = None
     error: Optional[str] = None
 
     @property
@@ -890,6 +986,7 @@ class CodexTelemetryReader:
         self._latest_snapshot: Optional[UsageSnapshot] = None
         self._watch_signatures: dict[str, tuple[int, int]] = {}
         self._watch_day_mtime_ns: Optional[int] = None
+        self._full_context_scanned_paths: set[str] = set()
 
     @staticmethod
     def _tail_lines(path: Path, max_bytes: int = 4 * 1024 * 1024) -> list[str]:
@@ -904,7 +1001,9 @@ class CodexTelemetryReader:
                     if start:
                         handle.readline()
                     data = handle.read()
-                if b'"rate_limits"' in data or scan_bytes >= size or scan_bytes >= max_bytes:
+                has_limits = b'"rate_limits"' in data
+                has_context = b'"model"' in data and (b'"reasoning_effort"' in data or b'"effort"' in data)
+                if (has_limits and has_context) or scan_bytes >= size or scan_bytes >= max_bytes:
                     break
                 scan_bytes = min(size, max_bytes, scan_bytes * 2)
             return data.decode("utf-8", errors="ignore").splitlines()
@@ -923,6 +1022,98 @@ class CodexTelemetryReader:
         if isinstance(info, dict) and isinstance(info.get("rate_limits"), dict):
             return info["rate_limits"]
         return None
+
+    @staticmethod
+    def _event_context(event: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+        """Extract only model/effort metadata from known Codex session structures."""
+
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            return None, None
+
+        thread_settings = payload.get("thread_settings")
+        if not isinstance(thread_settings, dict):
+            thread_settings = {}
+        collaboration = payload.get("collaboration_mode")
+        if not isinstance(collaboration, dict):
+            collaboration = {}
+        collaboration_settings = collaboration.get("settings")
+        if not isinstance(collaboration_settings, dict):
+            collaboration_settings = {}
+        thread_collaboration = thread_settings.get("collaboration_mode")
+        if not isinstance(thread_collaboration, dict):
+            thread_collaboration = {}
+        thread_collaboration_settings = thread_collaboration.get("settings")
+        if not isinstance(thread_collaboration_settings, dict):
+            thread_collaboration_settings = {}
+        state = payload.get("state")
+        if not isinstance(state, dict):
+            state = {}
+        provenance = payload.get("base_instructions")
+        if not isinstance(provenance, dict):
+            provenance = {}
+        provenance = provenance.get("provenance")
+        if not isinstance(provenance, dict):
+            provenance = {}
+
+        model = next(
+            (
+                candidate
+                for candidate in (
+                    metadata_text(payload.get("model")),
+                    metadata_text(thread_settings.get("model")),
+                    metadata_text(collaboration_settings.get("model")),
+                    metadata_text(thread_collaboration_settings.get("model")),
+                    metadata_text(state.get("model")),
+                    metadata_text(provenance.get("model")),
+                )
+                if candidate is not None
+            ),
+            None,
+        )
+        effort = next(
+            (
+                candidate
+                for candidate in (
+                    metadata_text(payload.get("reasoning_effort")),
+                    metadata_text(payload.get("effort")),
+                    metadata_text(thread_settings.get("reasoning_effort")),
+                    metadata_text(collaboration_settings.get("reasoning_effort")),
+                    metadata_text(thread_collaboration_settings.get("reasoning_effort")),
+                )
+                if candidate is not None
+            ),
+            None,
+        )
+        return model, effort
+
+    def _full_file_context(self, path: Path) -> tuple[Optional[str], Optional[str], float]:
+        """Find the latest model/effort state once when an active file's tail lacks it."""
+
+        latest_model: Optional[str] = None
+        latest_effort: Optional[str] = None
+        latest_timestamp = 0.0
+        try:
+            with path.open("r", encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    if not any(key in line for key in ('"model"', '"reasoning_effort"', '"effort"')):
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    model, effort = self._event_context(event)
+                    if model is None and effort is None:
+                        continue
+                    timestamp = parse_timestamp(event.get("timestamp")) or 0.0
+                    if model is not None:
+                        latest_model = model
+                    if effort is not None:
+                        latest_effort = effort
+                    latest_timestamp = max(latest_timestamp, timestamp)
+        except (OSError, UnicodeError):
+            pass
+        return latest_model, latest_effort, latest_timestamp
 
     @staticmethod
     def _allowance_windows(limits: dict[str, Any]) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
@@ -1001,15 +1192,39 @@ class CodexTelemetryReader:
             day_mtime = None
         return day_mtime != self._watch_day_mtime_ns
 
-    def _read_file(self, path: Path, file_mtime: float) -> Optional[UsageSnapshot]:
+    def _read_file(
+        self,
+        path: Path,
+        file_mtime: float,
+        fallback_snapshot: Optional[UsageSnapshot] = None,
+        scan_full_context: bool = False,
+    ) -> Optional[UsageSnapshot]:
+        """Read allowance/token records plus model and effort metadata, never message text."""
+
         latest: Optional[UsageSnapshot] = None
         latest_token_values: dict[str, Optional[float]] = {}
+        latest_model = fallback_snapshot.model if fallback_snapshot is not None else None
+        latest_effort = fallback_snapshot.reasoning_effort if fallback_snapshot is not None else None
+        latest_context_timestamp = 0.0
         for line in self._tail_lines(path):
-            if '"rate_limits"' not in line:
+            contains_limits = '"rate_limits"' in line
+            contains_context = any(key in line for key in ('"model"', '"reasoning_effort"', '"effort"'))
+            if not contains_limits and not contains_context:
                 continue
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            timestamp = parse_timestamp(event.get("timestamp")) or file_mtime
+            if contains_context:
+                model, effort = self._event_context(event)
+                if model is not None:
+                    latest_model = model
+                    latest_context_timestamp = max(latest_context_timestamp, timestamp)
+                if effort is not None:
+                    latest_effort = effort
+                    latest_context_timestamp = max(latest_context_timestamp, timestamp)
+            if not contains_limits:
                 continue
             limits = self._rate_limits(event)
             if not limits:
@@ -1040,7 +1255,6 @@ class CodexTelemetryReader:
                 latest_token_values = token_values
             elif latest_token_values:
                 token_values = latest_token_values
-            timestamp = parse_timestamp(event.get("timestamp")) or file_mtime
             snapshot = UsageSnapshot(
                 used_percent=clamp(weekly_used, 0, 100) if weekly_used is not None else None,
                 window_minutes=int(number(weekly.get("window_minutes")) or 0) or None if weekly else None,
@@ -1058,9 +1272,27 @@ class CodexTelemetryReader:
                 total_tokens=token_values.get("total_tokens"),
                 last_tokens=token_values.get("last_tokens"),
                 context_window=token_values.get("context_window"),
+                model=latest_model,
+                reasoning_effort=latest_effort,
             )
             if latest is None or timestamp > (latest.timestamp or 0):
                 latest = snapshot
+        if scan_full_context:
+            model, effort, context_timestamp = self._full_file_context(path)
+            if model is not None:
+                latest_model = model
+            if effort is not None:
+                latest_effort = effort
+            latest_context_timestamp = max(latest_context_timestamp, context_timestamp)
+        if latest is None:
+            latest = fallback_snapshot
+        if latest is not None and (latest_model is not None or latest_effort is not None):
+            latest = replace(
+                latest,
+                timestamp=max(latest.timestamp or 0, latest_context_timestamp) or latest.timestamp,
+                model=latest_model or latest.model,
+                reasoning_effort=latest_effort or latest.reasoning_effort,
+            )
         return latest
 
     def read(self) -> UsageSnapshot:
@@ -1080,7 +1312,7 @@ class CodexTelemetryReader:
             if cached is not None and cached[:2] == signature:
                 snapshot = cached[2]
             else:
-                snapshot = self._read_file(path, metadata.st_mtime)
+                snapshot = self._read_file(path, metadata.st_mtime, cached[2] if cached is not None else None)
                 if (
                     cached is not None
                     and metadata.st_size > cached[1]
@@ -1097,6 +1329,29 @@ class CodexTelemetryReader:
 
         if latest:
             candidate = latest[1]
+            if (
+                (candidate.model is None or candidate.reasoning_effort is None)
+                and candidate.source_path is not None
+                and candidate.source_path not in self._full_context_scanned_paths
+            ):
+                source_path = Path(candidate.source_path)
+                try:
+                    source_mtime = source_path.stat().st_mtime
+                except OSError:
+                    source_mtime = 0.0
+                refreshed = self._read_file(
+                    source_path,
+                    source_mtime,
+                    candidate,
+                    scan_full_context=True,
+                )
+                self._full_context_scanned_paths.add(candidate.source_path)
+                if refreshed is not None:
+                    candidate = refreshed
+                    cached_entry = next_cache.get(str(source_path))
+                    if cached_entry is not None:
+                        next_cache[str(source_path)] = (cached_entry[0], cached_entry[1], candidate)
+                        self._file_cache = next_cache
             previous = self._latest_snapshot
             if previous is not None:
                 previous_timestamp = previous.timestamp or 0
@@ -1611,6 +1866,7 @@ class UsageApp:
         self.stats_usage_points: list[dict[str, Any]] = []
         self.stats_period_hours = 1
         self.stats_daily_view = False
+        self.stats_weekly_view = False
         self.stats_plot_points: list[dict[str, Any]] = []
         self.stats_plot_start = 0.0
         self.stats_plot_end = 0.0
@@ -2126,6 +2382,7 @@ class UsageApp:
 
         self.stats_period_hours = 1
         self.stats_daily_view = False
+        self.stats_weekly_view = False
         dialog = tk.Toplevel(self.root)
         self.stats_window = dialog
         dialog.title("Codex Usage Statistics")
@@ -2178,37 +2435,19 @@ class UsageApp:
             "highlightthickness": 0,
             "font": ("Segoe UI", 8, "bold"),
         }
-        tk.Button(period_buttons, text="1 hour", command=lambda: self.set_stats_period(1), **button_style).pack(
-            side="left", padx=(0, 5), ipadx=7, ipady=3
-        )
-        tk.Button(period_buttons, text="3 hours", command=lambda: self.set_stats_period(3), **button_style).pack(
-            side="left", padx=(0, 5), ipadx=7, ipady=3
-        )
-        tk.Button(period_buttons, text="12 hours", command=lambda: self.set_stats_period(12), **button_style).pack(
-            side="left", padx=(0, 5), ipadx=7, ipady=3
-        )
-        tk.Button(period_buttons, text="24 hours", command=lambda: self.set_stats_period(24), **button_style).pack(
-            side="left", padx=(0, 5), ipadx=7, ipady=3
-        )
-        tk.Button(period_buttons, text="48 hours", command=lambda: self.set_stats_period(48), **button_style).pack(
-            side="left", padx=(0, 5), ipadx=7, ipady=3
-        )
-        tk.Button(period_buttons, text="4 days", command=lambda: self.set_stats_period(24 * 4), **button_style).pack(
-            side="left", padx=(0, 5), ipadx=7, ipady=3
-        )
-        tk.Button(period_buttons, text="7 days", command=lambda: self.set_stats_period(24 * 7), **button_style).pack(
-            side="left", padx=(0, 5), ipadx=7, ipady=3
-        )
-        tk.Button(period_buttons, text="30 days", command=lambda: self.set_stats_period(24 * 30), **button_style).pack(
-            side="left", padx=(0, 5), ipadx=7, ipady=3
+        tk.Button(period_buttons, text="Hourly", command=self.set_stats_hourly, **button_style).pack(
+            side="left", padx=(0, 5), ipadx=9, ipady=3
         )
         tk.Button(period_buttons, text="Daily", command=self.set_stats_daily, **button_style).pack(
-            side="left", padx=(0, 0), ipadx=7, ipady=3
+            side="left", padx=(0, 5), ipadx=9, ipady=3
+        )
+        tk.Button(period_buttons, text="Weekly", command=self.set_stats_weekly, **button_style).pack(
+            side="left", padx=(0, 0), ipadx=9, ipady=3
         )
 
         self.stats_readout = tk.Label(
             dialog,
-            text="LIVE VALUES  ·  click or drag across the plot to inspect a point",
+            text="HOURLY · 1 HOUR  ·  mouse wheel zooms · click or drag inspects points",
             bg=COLORS["ink"],
             fg=COLORS["muted"],
             anchor="w",
@@ -2225,7 +2464,7 @@ class UsageApp:
         self.stats_canvas.pack(fill="both", expand=True)
         self.stats_canvas.bind("<Button-1>", self._select_statistics_point)
         self.stats_canvas.bind("<B1-Motion>", self._select_statistics_point)
-        self.stats_canvas.bind("<MouseWheel>", self._scroll_statistics_point)
+        self.stats_canvas.bind("<MouseWheel>", self._zoom_statistics_with_wheel)
         self.stats_canvas.bind("<Configure>", self._resize_statistics)
         dialog.protocol("WM_DELETE_WINDOW", self.close_statistics)
         dialog.update_idletasks()
@@ -2256,14 +2495,50 @@ class UsageApp:
     def set_stats_period(self, hours: int) -> None:
         self.stats_period_hours = hours
         self.stats_daily_view = False
+        self.stats_weekly_view = False
         self.stats_selected_timestamp = None
         self._render_statistics()
+
+    def set_stats_hourly(self) -> None:
+        self.set_stats_period(1)
 
     def set_stats_daily(self) -> None:
         self.stats_period_hours = HISTORY_RETENTION_DAYS * 24
         self.stats_daily_view = True
+        self.stats_weekly_view = False
         self.stats_selected_timestamp = None
         self._render_statistics()
+
+    def set_stats_weekly(self) -> None:
+        self.stats_period_hours = HISTORY_RETENTION_DAYS * 24
+        self.stats_daily_view = False
+        self.stats_weekly_view = True
+        self.stats_selected_timestamp = None
+        self._render_statistics()
+
+    def _maximum_hourly_zoom_hours(self) -> int:
+        if not self.history.points:
+            return 1
+        oldest_timestamp = min(point["timestamp"] for point in self.history.points)
+        recorded_hours = max(1, math.ceil((time.time() - oldest_timestamp) / 3600))
+        return min(HISTORY_RETENTION_DAYS * 24, recorded_hours)
+
+    def zoom_statistics(self, direction: int) -> None:
+        """Zoom the detailed Hourly chart through every span in recorded history."""
+
+        if self.stats_daily_view or self.stats_weekly_view:
+            return
+        maximum = self._maximum_hourly_zoom_hours()
+        if direction > 0:
+            target = min(maximum, max(2, self.stats_period_hours * 2))
+        else:
+            target = max(1, math.ceil(self.stats_period_hours / 2))
+        if target != self.stats_period_hours:
+            self.set_stats_period(target)
+
+    def _zoom_statistics_with_wheel(self, event: Any) -> str:
+        self.zoom_statistics(1 if getattr(event, "delta", 0) < 0 else -1)
+        return "break"
 
     def close_statistics(self) -> None:
         if self.stats_window is not None:
@@ -2315,7 +2590,7 @@ class UsageApp:
         if not self.stats_card_value_items or self.stats_canvas is None:
             return
         data = point if point is not None else self.stats_live_card_data
-        if self.stats_daily_view and data.get("daily"):
+        if (self.stats_daily_view or self.stats_weekly_view) and (data.get("daily") or data.get("weekly")):
             def points_text(value: Optional[float]) -> str:
                 return f"{value:.1f} pts" if value is not None and math.isfinite(value) else "--"
 
@@ -2432,10 +2707,16 @@ class UsageApp:
         if self.stats_selected_timestamp is None or not self.stats_plot_points:
             self._update_statistics_cards(None)
             if self.stats_readout is not None:
-                if self.stats_daily_view:
-                    self.stats_readout.configure(text="LATEST RECORDED DAY  ·  click, drag, or scroll through daily bars")
+                context = format_model_effort(self.snapshot.model, self.snapshot.reasoning_effort)
+                if self.stats_daily_view or self.stats_weekly_view:
+                    interval = "WEEK" if self.stats_weekly_view else "DAY"
+                    self.stats_readout.configure(
+                        text=f"LATEST RECORDED {interval}  ·  live context: {context}  ·  click, drag, or scroll through bars"
+                    )
                 else:
-                    self.stats_readout.configure(text="LIVE VALUES  ·  click or drag across the plot to inspect a point")
+                    self.stats_readout.configure(
+                        text=f"LIVE CONTEXT: {context}  ·  mouse wheel zooms · click or drag inspects a point"
+                    )
             return
         selected = min(
             self.stats_plot_points,
@@ -2443,7 +2724,7 @@ class UsageApp:
         )
         fraction = (selected["timestamp"] - self.stats_plot_start) / max(1, self.stats_plot_end - self.stats_plot_start)
         x = self.stats_plot_left + clamp(fraction, 0, 1) * (self.stats_plot_right - self.stats_plot_left)
-        if not self.stats_daily_view:
+        if not (self.stats_daily_view or self.stats_weekly_view):
             canvas.create_line(
                 x,
                 self.stats_usage_top - 6,
@@ -2459,7 +2740,7 @@ class UsageApp:
         rate = selected.get("rate_per_hour")
         five_hour_rate = selected.get("five_hour_rate_per_hour")
         token_rate = selected.get("token_rate_per_minute")
-        if self.stats_daily_view:
+        if self.stats_daily_view or self.stats_weekly_view:
             for value, color, lane_top, lane_bottom in (
                 (
                     used,
@@ -2535,7 +2816,10 @@ class UsageApp:
             self._update_statistics_cards(selected)
             if self.stats_readout is not None:
                 self.stats_readout.configure(
-                    text=f"SELECTED {local.strftime('%a, %b %d')}  ·  daily totals + averages"
+                    text=(
+                        f"SELECTED {local.strftime('%a, %b %d')}  ·  "
+                        f"ending context: {format_model_effort(selected.get('model'), selected.get('reasoning_effort'))}"
+                    )
                 )
             return
         if used is not None:
@@ -2610,7 +2894,12 @@ class UsageApp:
         when = f"{local.strftime('%b %d')} {local.strftime('%I:%M %p').lstrip('0')}"
         self._update_statistics_cards(selected)
         if self.stats_readout is not None:
-            self.stats_readout.configure(text=f"SELECTED {when}  ·  cards updated")
+            self.stats_readout.configure(
+                text=(
+                    f"SELECTED {when}  ·  "
+                    f"context: {format_model_effort(selected.get('model'), selected.get('reasoning_effort'))}"
+                )
+            )
 
     def _render_statistics_legacy(self) -> None:
         canvas = self.stats_canvas
@@ -2862,6 +3151,72 @@ class UsageApp:
         self.stats_weekly_usage_top, self.stats_weekly_usage_bottom = lanes["weekly"]
         return lanes
 
+    @staticmethod
+    def _context_changes(points: list[dict[str, Any]]) -> list[tuple[float, str, str]]:
+        """Return only state transitions, so context never becomes chart clutter."""
+
+        changes: list[tuple[float, str, str]] = []
+        previous_model: Optional[str] = None
+        previous_effort: Optional[str] = None
+        for point in points:
+            timestamp = number(point.get("timestamp"))
+            if timestamp is None:
+                continue
+            model = metadata_text(point.get("model"))
+            effort = metadata_text(point.get("reasoning_effort"))
+            if model is not None and previous_model is not None and model != previous_model:
+                changes.append((timestamp, "model", model))
+            if effort is not None and previous_effort is not None and effort != previous_effort:
+                changes.append((timestamp, "effort", effort))
+            if model is not None:
+                previous_model = model
+            if effort is not None:
+                previous_effort = effort
+        return changes
+
+    def _draw_statistics_context_markers(
+        self,
+        canvas: tk.Canvas,
+        points: list[dict[str, Any]],
+        start_time: float,
+        end_time: float,
+        left: float,
+        right: float,
+        top: float,
+        bottom: float,
+    ) -> None:
+        """Annotate model/effort changes behind the metrics they help explain."""
+
+        span = max(1.0, end_time - start_time)
+        for timestamp, change_type, _value in self._context_changes(points):
+            x = left + clamp((timestamp - start_time) / span, 0, 1) * (right - left)
+            if change_type == "model":
+                color, width, dash, offset = COLORS["amber"], 2, (), -1.0
+            else:
+                color, width, dash, offset = COLORS["coral"], 1, (3, 2), 1.0
+            marker_x = x + offset
+            canvas.create_line(
+                marker_x,
+                top + 1,
+                marker_x,
+                bottom - 1,
+                fill=color,
+                width=width,
+                dash=dash,
+                tags=("stats-context-marker", f"stats-{change_type}-marker"),
+            )
+            canvas.create_polygon(
+                marker_x - 4,
+                top + 1,
+                marker_x + 4,
+                top + 1,
+                marker_x,
+                top + 7,
+                fill=color,
+                outline="",
+                tags=("stats-context-marker", f"stats-{change_type}-marker"),
+            )
+
     def _draw_statistics_daily_rate_lanes(
         self,
         canvas: tk.Canvas,
@@ -2925,7 +3280,7 @@ class UsageApp:
         return lanes
 
     def _render_daily_statistics(self) -> None:
-        """Render one stock-chart-style bar per local calendar day."""
+        """Render one stock-chart-style bar per local day or local week."""
 
         canvas = self.stats_canvas
         if canvas is None:
@@ -2933,10 +3288,19 @@ class UsageApp:
         canvas.delete("all")
         canvas_width = max(640, int(canvas.winfo_width()))
         canvas_height = max(560, int(canvas.winfo_height()))
-        daily_points = self.history.daily_statistics(HISTORY_RETENTION_DAYS)
+        is_weekly = self.stats_weekly_view
+        interval_name = "WEEKLY" if is_weekly else "DAILY"
+        interval_label = "week" if is_weekly else "day"
+        interval_days = 7 if is_weekly else 1
+        bucket_key = "week_start" if is_weekly else "day_start"
+        daily_points = (
+            self.history.weekly_statistics(HISTORY_RETENTION_DAYS)
+            if is_weekly
+            else self.history.daily_statistics(HISTORY_RETENTION_DAYS)
+        )
         self.stats_usage_points = self.history.chart_points(HISTORY_RETENTION_DAYS * 24)
         self.stats_plot_points = daily_points
-        self.stats_live_card_data = daily_points[-1] if daily_points else {"daily": True}
+        self.stats_live_card_data = daily_points[-1] if daily_points else ({"weekly": True} if is_weekly else {"daily": True})
 
         card_groups = (
             (
@@ -2995,8 +3359,15 @@ class UsageApp:
 
         now_local = datetime.now().astimezone()
         today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-        range_start = today_start - timedelta(days=HISTORY_RETENTION_DAYS - 1)
-        range_end = today_start + timedelta(days=1)
+        if is_weekly:
+            current_week_start = today_start - timedelta(days=today_start.weekday())
+            visible_weeks = math.ceil(HISTORY_RETENTION_DAYS / 7)
+            range_start = current_week_start - timedelta(days=(visible_weeks - 1) * 7)
+            range_end = current_week_start + timedelta(days=7)
+        else:
+            visible_weeks = 0
+            range_start = today_start - timedelta(days=HISTORY_RETENTION_DAYS - 1)
+            range_end = today_start + timedelta(days=1)
         start_time = range_start.timestamp()
         end_time = range_end.timestamp()
         span = max(1.0, end_time - start_time)
@@ -3012,7 +3383,7 @@ class UsageApp:
         canvas.create_text(
             18,
             card_layout["history_title_y"],
-            text="DAILY HISTORY",
+            text=f"{interval_name} HISTORY",
             anchor="w",
             fill=COLORS["soft"],
             font=("Segoe UI", 8, "bold"),
@@ -3020,7 +3391,7 @@ class UsageApp:
         canvas.create_text(
             canvas_width - 18,
             card_layout["history_title_y"],
-            text="one day per bar · select any day to update the cards",
+            text=f"one {interval_label} per bar · select any {interval_label} to update the cards",
             anchor="e",
             fill=COLORS["muted"],
             font=("Segoe UI", 8),
@@ -3028,7 +3399,7 @@ class UsageApp:
         canvas.create_text(
             18,
             card_layout["history_subtitle_y"],
-            text=f"LAST {HISTORY_RETENTION_DAYS} CALENDAR DAYS",
+            text=(f"LAST {visible_weeks} CALENDAR WEEKS" if is_weekly else f"LAST {HISTORY_RETENTION_DAYS} CALENDAR DAYS"),
             anchor="w",
             fill=COLORS["muted"],
             font=("Segoe UI", 8),
@@ -3036,7 +3407,11 @@ class UsageApp:
         canvas.create_text(
             canvas_width - 18,
             card_layout["history_subtitle_y"],
-            text="missing days stay blank; totals use recorded reset-aware increases",
+            text=(
+                "missing weeks stay blank; totals sum recorded reset-aware daily increases"
+                if is_weekly
+                else "missing days stay blank; totals use recorded reset-aware increases"
+            ),
             anchor="e",
             fill=COLORS["muted"],
             font=("Segoe UI", 8),
@@ -3060,8 +3435,8 @@ class UsageApp:
             left,
             right,
             geometry,
-            "USAGE TOTALS · POINTS / DAY",
-            "DAILY TOKEN TOTAL",
+            f"USAGE TOTALS · POINTS / {interval_label.upper()}",
+            f"{interval_name} TOKEN TOTAL",
         )
 
         usage_values = [
@@ -3113,13 +3488,13 @@ class UsageApp:
         )
 
         for point in daily_points:
-            day_start = number(point.get("day_start"))
-            if day_start is None:
+            bucket_start = number(point.get(bucket_key))
+            if bucket_start is None:
                 continue
-            day_local = datetime.fromtimestamp(day_start).astimezone()
-            next_day_start = (day_local + timedelta(days=1)).timestamp()
-            bar_left = x_for(day_start)
-            bar_right = x_for(next_day_start)
+            bucket_local = datetime.fromtimestamp(bucket_start).astimezone()
+            next_bucket_start = (bucket_local + timedelta(days=interval_days)).timestamp()
+            bar_left = x_for(bucket_start)
+            bar_right = x_for(next_bucket_start)
             weekly_total = number(point.get("used_percent")) or 0.0
             five_hour_total = number(point.get("five_hour_used_percent")) or 0.0
             for lane_key, total, color, tag in (
@@ -3145,13 +3520,13 @@ class UsageApp:
             rate_scale = daily_rate_scales[lane_key]
             for point in daily_points:
                 value = number(point.get(field))
-                day_start = number(point.get("day_start"))
-                if value is None or day_start is None:
+                bucket_start = number(point.get(bucket_key))
+                if value is None or bucket_start is None:
                     continue
-                day_local = datetime.fromtimestamp(day_start).astimezone()
-                next_day_start = (day_local + timedelta(days=1)).timestamp()
-                bar_left = x_for(day_start)
-                bar_right = x_for(next_day_start)
+                bucket_local = datetime.fromtimestamp(bucket_start).astimezone()
+                next_bucket_start = (bucket_local + timedelta(days=interval_days)).timestamp()
+                bar_left = x_for(bucket_start)
+                bar_right = x_for(next_bucket_start)
                 y = lane_top + ((rate_scale - clamp(value, 0, rate_scale)) / rate_scale) * (lane_bottom - lane_top)
                 canvas.create_rectangle(
                     bar_left,
@@ -3169,7 +3544,7 @@ class UsageApp:
             canvas.create_text(
                 (left + right) / 2,
                 (usage_top + usage_bottom) / 2,
-                text="Keep the counter running to build daily bars.",
+                text=f"Keep the counter running to build {interval_label} bars.",
                 fill=COLORS["muted"],
                 font=("Segoe UI", 10),
             )
@@ -3181,7 +3556,7 @@ class UsageApp:
             canvas.create_text(
                 (left + right) / 2,
                 (rate_top + rate_bottom) / 2,
-                text="More samples are needed to estimate daily pace.",
+                text=f"More samples are needed to estimate {interval_label} pace.",
                 fill=COLORS["muted"],
                 font=("Segoe UI", 10),
             )
@@ -3202,13 +3577,13 @@ class UsageApp:
         canvas.create_text(canvas_width - 10, token_top, text=format_token_count(token_scale), anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         canvas.create_text(canvas_width - 10, token_bottom, text="0", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         for point in daily_points:
-            day_start = number(point.get("day_start"))
-            if day_start is None:
+            bucket_start = number(point.get(bucket_key))
+            if bucket_start is None:
                 continue
-            day_local = datetime.fromtimestamp(day_start).astimezone()
-            next_day_start = (day_local + timedelta(days=1)).timestamp()
-            bar_left = x_for(day_start)
-            bar_right = x_for(next_day_start)
+            bucket_local = datetime.fromtimestamp(bucket_start).astimezone()
+            next_bucket_start = (bucket_local + timedelta(days=interval_days)).timestamp()
+            bar_left = x_for(bucket_start)
+            bar_right = x_for(next_bucket_start)
             total = number(point.get("daily_total_tokens")) or 0.0
             y = token_top + ((token_scale - clamp(total, 0, token_scale)) / token_scale) * (token_bottom - token_top)
             canvas.create_rectangle(
@@ -3233,7 +3608,7 @@ class UsageApp:
         canvas = self.stats_canvas
         if canvas is None:
             return
-        if self.stats_daily_view:
+        if self.stats_daily_view or self.stats_weekly_view:
             self._render_daily_statistics()
             return
         canvas.delete("all")
@@ -3282,6 +3657,8 @@ class UsageApp:
             "total_tokens": current_tokens,
             "last_tokens": self.snapshot.last_tokens,
             "token_rate_per_minute": current_token_rate,
+            "model": self.snapshot.model,
+            "reasoning_effort": self.snapshot.reasoning_effort,
         }
 
         def rate_text(value: Optional[float]) -> str:
@@ -3371,6 +3748,8 @@ class UsageApp:
                 "output_tokens",
                 "reasoning_tokens",
                 "last_tokens",
+                "model",
+                "reasoning_effort",
             ):
                 if field in point:
                     plot_point[field] = point[field]
@@ -3440,10 +3819,13 @@ class UsageApp:
             fill=COLORS["muted"],
             font=("Segoe UI", 8),
         )
-        scope_label = {1: "1 HOUR", 24 * 4: "4 DAYS", 24 * 7: "7 DAYS", 24 * 30: "30 DAYS"}.get(
-            self.stats_period_hours,
-            f"{self.stats_period_hours} HOURS",
-        )
+        if self.stats_period_hours == 1:
+            scope_label = "1 HOUR"
+        elif self.stats_period_hours % 24 == 0:
+            days = self.stats_period_hours // 24
+            scope_label = f"{days} DAY" if days == 1 else f"{days} DAYS"
+        else:
+            scope_label = f"{self.stats_period_hours} HOURS"
         canvas.create_text(
             18,
             card_layout["history_subtitle_y"],
@@ -3455,7 +3837,7 @@ class UsageApp:
         canvas.create_text(
             canvas_width - 18,
             card_layout["history_subtitle_y"],
-            text="5-hour history begins when Codex reports it; no backfilled values",
+            text="solid amber = model · dashed coral = effort · no backfilled context",
             anchor="e",
             fill=COLORS["muted"],
             font=("Segoe UI", 8),
@@ -3481,6 +3863,16 @@ class UsageApp:
             geometry,
             "USAGE HISTORY · 0–100%",
             "TOKEN ACTIVITY",
+        )
+        self._draw_statistics_context_markers(
+            canvas,
+            usage_points,
+            start_time,
+            end_time,
+            left,
+            right,
+            geometry["usage_pane_top"],
+            geometry["token_pane_bottom"],
         )
         usage_lanes = self._draw_statistics_usage_lanes(
             canvas,
