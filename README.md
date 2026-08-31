@@ -9,8 +9,8 @@ A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, rese
 - Shows independent 5-hour and weekly Codex allowance percentages, reset countdowns, pace, and ETA.
 - Tracks current-task input, cached-input, output, reasoning, total, and last-response token counts from local Codex aggregate telemetry.
 - Refreshes within about a second when an already-discovered active Codex session file changes; configurable polling remains the fallback.
-- Shows timestamped model and reasoning-effort changes on the detailed Hourly chart: solid amber for a model switch and dashed coral for an effort switch.
-- Keeps Statistics focused on **Hourly** (the default; mouse-wheel zoom through all retained history), **Daily**, and **Weekly** views.
+- Shows timestamped model and reasoning-effort changes on the detailed Hourly chart with thin, subtle amber model markers and thin, subtle dashed-coral effort markers.
+- Keeps Statistics focused on **Hourly** (the default; mouse-wheel zoom from one minute through all retained history), **Daily**, and **Weekly** views.
 - Displays the most constrained allowance directly in the notification-area tray icon, so the number is useful without hovering; the tooltip identifies both windows.
 - Shows a custom in-app tray milestone popup above the Windows notification area; it does not use Windows toast or balloon notifications.
 - Polls local usage every two minutes by default; every automatic read refreshes usage, rate, and ETA together, while **Refresh now** reads immediately outside that schedule.
@@ -18,7 +18,7 @@ A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, rese
 - Keeps minute-level usage history in the zoomable **Hourly** view, plus stock-chart-style **Daily** and **Weekly** intervals with reset-aware 5-hour/weekly totals, pace, and token activity.
 - Opens Statistics as a fullscreen view with a responsive, edge-to-edge chart canvas.
 - Keeps matching 5-hour and weekly cards side by side and updates those cards when an Hourly, Daily, or Weekly point is clicked, dragged across, or selected with the mouse wheel.
-- Provides continuous 5-hour and weekly usage bars in separate lanes, separate rate lines, token activity, observed tokens per allowance point, ETA, reset-aware regression, and time-series statistics.
+- Provides continuous 5-hour and weekly usage bars in separate lanes, continuous rate paths between recorded active periods, token activity, observed tokens per allowance point, ETA, reset-aware regression, and time-series statistics.
 
 ## Quick start on Windows
 

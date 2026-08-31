@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes as wintypes
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 import json
 import math
 import os
@@ -54,6 +54,7 @@ STATS_PLOT_TOP = 192.0
 STATS_WIDE_MIN_WIDTH = 1100
 STATS_WIDE_CARD_COLUMNS = 6
 STATS_NARROW_CARD_COLUMNS = 4
+STATS_MIN_HOURLY_ZOOM_MINUTES = 1
 
 COLORS = {
     "ink": "#0d1224",
@@ -229,6 +230,22 @@ def format_updated(timestamp: Optional[float]) -> str:
         return "No local signal yet"
     local = datetime.fromtimestamp(timestamp).astimezone()
     return f"Updated {local.strftime('%I:%M %p').lstrip('0')}"
+
+
+def format_statistics_span(hours: float) -> str:
+    """Describe a detailed chart window with the smallest useful local-history unit."""
+
+    minutes = max(STATS_MIN_HOURLY_ZOOM_MINUTES, int(round(hours * 60)))
+    if minutes < 60:
+        return f"{minutes} MINUTE" if minutes == 1 else f"{minutes} MINUTES"
+    if minutes % (24 * 60) == 0:
+        days = minutes // (24 * 60)
+        return f"{days} DAY" if days == 1 else f"{days} DAYS"
+    if minutes % 60 == 0:
+        whole_hours = minutes // 60
+        return f"{whole_hours} HOUR" if whole_hours == 1 else f"{whole_hours} HOURS"
+    whole_hours, remainder_minutes = divmod(minutes, 60)
+    return f"{whole_hours}H {remainder_minutes:02d}M"
 
 
 def format_token_count(value: Optional[float]) -> str:
@@ -535,11 +552,11 @@ class UsageHistory:
         except OSError:
             pass
 
-    def since(self, hours: int) -> list[dict[str, Any]]:
+    def since(self, hours: float) -> list[dict[str, Any]]:
         cutoff = time.time() - hours * 60 * 60
         return [item for item in self.points if item["timestamp"] >= cutoff]
 
-    def hourly(self, hours: int) -> list[dict[str, Any]]:
+    def hourly(self, hours: float) -> list[dict[str, Any]]:
         """Collapse samples to the latest reading in each local hour bucket."""
 
         buckets: dict[int, dict[str, Any]] = {}
@@ -548,7 +565,7 @@ class UsageHistory:
             buckets[bucket] = point
         return [buckets[key] for key in sorted(buckets)]
 
-    def chart_points(self, hours: int) -> list[dict[str, Any]]:
+    def chart_points(self, hours: float) -> list[dict[str, Any]]:
         """Return the minute-level series used by every statistics range."""
 
         return self._sanitize(self.since(hours))
@@ -784,7 +801,7 @@ class UsageHistory:
 
     def rate_series(
         self,
-        hours: int,
+        hours: float,
         points: Optional[list[dict[str, Any]]] = None,
         value_field: str = "used_percent",
     ) -> list[dict[str, Any]]:
@@ -858,7 +875,7 @@ class UsageHistory:
 
     def token_rate_series(
         self,
-        hours: int,
+        hours: float,
         points: Optional[list[dict[str, Any]]] = None,
     ) -> list[dict[str, Any]]:
         """Return an aligned, lightly smoothed current-task token rate."""
@@ -903,7 +920,7 @@ class UsageHistory:
 
     def token_efficiency(
         self,
-        hours: int,
+        hours: float,
         points: Optional[list[dict[str, Any]]] = None,
         value_field: str = "used_percent",
         resets_field: str = "resets_at",
@@ -1864,7 +1881,8 @@ class UsageApp:
         self.stats_card_value_items: list[int] = []
         self.stats_live_card_data: dict[str, Any] = {}
         self.stats_usage_points: list[dict[str, Any]] = []
-        self.stats_period_hours = 1
+        self.stats_rate_context_points: list[dict[str, Any]] = []
+        self.stats_period_hours = 1.0
         self.stats_daily_view = False
         self.stats_weekly_view = False
         self.stats_plot_points: list[dict[str, Any]] = []
@@ -2380,7 +2398,7 @@ class UsageApp:
             except tk.TclError:
                 pass
 
-        self.stats_period_hours = 1
+        self.stats_period_hours = 1.0
         self.stats_daily_view = False
         self.stats_weekly_view = False
         dialog = tk.Toplevel(self.root)
@@ -2447,7 +2465,7 @@ class UsageApp:
 
         self.stats_readout = tk.Label(
             dialog,
-            text="HOURLY · 1 HOUR  ·  mouse wheel zooms · click or drag inspects points",
+            text="HOURLY · LAST 1 HOUR  ·  mouse wheel zooms from 1 minute · click or drag inspects points",
             bg=COLORS["ink"],
             fg=COLORS["muted"],
             anchor="w",
@@ -2492,48 +2510,62 @@ class UsageApp:
         self.stats_canvas_size = size
         self._render_statistics()
 
-    def set_stats_period(self, hours: int) -> None:
-        self.stats_period_hours = hours
+    def set_stats_period(self, hours: float) -> None:
+        self.stats_period_hours = max(STATS_MIN_HOURLY_ZOOM_MINUTES / 60, float(hours))
         self.stats_daily_view = False
         self.stats_weekly_view = False
         self.stats_selected_timestamp = None
         self._render_statistics()
 
     def set_stats_hourly(self) -> None:
-        self.set_stats_period(1)
+        self.set_stats_period(1.0)
 
     def set_stats_daily(self) -> None:
-        self.stats_period_hours = HISTORY_RETENTION_DAYS * 24
+        self.stats_period_hours = float(HISTORY_RETENTION_DAYS * 24)
         self.stats_daily_view = True
         self.stats_weekly_view = False
         self.stats_selected_timestamp = None
         self._render_statistics()
 
     def set_stats_weekly(self) -> None:
-        self.stats_period_hours = HISTORY_RETENTION_DAYS * 24
+        self.stats_period_hours = float(HISTORY_RETENTION_DAYS * 24)
         self.stats_daily_view = False
         self.stats_weekly_view = True
         self.stats_selected_timestamp = None
         self._render_statistics()
 
-    def _maximum_hourly_zoom_hours(self) -> int:
+    def _maximum_hourly_zoom_hours(self) -> float:
         if not self.history.points:
-            return 1
+            return 1.0
         oldest_timestamp = min(point["timestamp"] for point in self.history.points)
-        recorded_hours = max(1, math.ceil((time.time() - oldest_timestamp) / 3600))
-        return min(HISTORY_RETENTION_DAYS * 24, recorded_hours)
+        recorded_hours = max(1.0, (time.time() - oldest_timestamp) / 3600)
+        return min(float(HISTORY_RETENTION_DAYS * 24), recorded_hours)
+
+    def _hourly_zoom_steps_minutes(self) -> list[int]:
+        """Return familiar, readable wheel-zoom stops down to the recorded minute resolution."""
+
+        maximum_minutes = max(60, math.ceil(self._maximum_hourly_zoom_hours() * 60))
+        steps = [1, 2, 3, 5, 10, 15, 30, 60]
+        while steps[-1] < maximum_minutes:
+            steps.append(steps[-1] * 2)
+        result = [step for step in steps if step <= maximum_minutes]
+        if result[-1] != maximum_minutes:
+            result.append(maximum_minutes)
+        return result
 
     def zoom_statistics(self, direction: int) -> None:
         """Zoom the detailed Hourly chart through every span in recorded history."""
 
         if self.stats_daily_view or self.stats_weekly_view:
             return
-        maximum = self._maximum_hourly_zoom_hours()
+        steps = self._hourly_zoom_steps_minutes()
+        current_minutes = max(STATS_MIN_HOURLY_ZOOM_MINUTES, int(round(self.stats_period_hours * 60)))
         if direction > 0:
-            target = min(maximum, max(2, self.stats_period_hours * 2))
+            target_minutes = steps[min(len(steps) - 1, bisect_right(steps, current_minutes))]
         else:
-            target = max(1, math.ceil(self.stats_period_hours / 2))
-        if target != self.stats_period_hours:
+            target_minutes = steps[max(0, bisect_left(steps, current_minutes) - 1)]
+        target = target_minutes / 60
+        if not math.isclose(target, self.stats_period_hours, abs_tol=1 / 120):
             self.set_stats_period(target)
 
     def _zoom_statistics_with_wheel(self, event: Any) -> str:
@@ -2554,6 +2586,7 @@ class UsageApp:
         self.stats_card_value_items = []
         self.stats_live_card_data = {}
         self.stats_usage_points = []
+        self.stats_rate_context_points = []
         self.stats_plot_points = []
         self.stats_selected_timestamp = None
 
@@ -2648,11 +2681,11 @@ class UsageApp:
         last_tokens = number(data.get("last_tokens"))
         token_rate = number(data.get("token_rate_per_minute"))
 
-        scoped_points = self.stats_usage_points
+        scoped_points = self.stats_rate_context_points or self.stats_usage_points
         if point is not None:
             scoped_points = [
                 candidate
-                for candidate in self.stats_usage_points
+                for candidate in scoped_points
                 if candidate["timestamp"] <= point["timestamp"]
             ]
         weekly_tokens_per_point = self.history.token_efficiency(self.stats_period_hours, scoped_points)
@@ -2715,7 +2748,10 @@ class UsageApp:
                     )
                 else:
                     self.stats_readout.configure(
-                        text=f"LIVE CONTEXT: {context}  ·  mouse wheel zooms · click or drag inspects a point"
+                        text=(
+                            f"HOURLY · LAST {format_statistics_span(self.stats_period_hours)}  ·  "
+                            f"live context: {context}  ·  mouse wheel zooms · click or drag inspects a point"
+                        )
                     )
             return
         selected = min(
@@ -2936,7 +2972,7 @@ class UsageApp:
         canvas.create_text(
             18,
             96,
-            text=f"HOURLY TREND  ·  LAST {self.stats_period_hours} HOURS",
+            text=f"HOURLY TREND  ·  LAST {format_statistics_span(self.stats_period_hours)}",
             anchor="w",
             fill=COLORS["soft"],
             font=("Segoe UI", 8, "bold"),
@@ -2971,6 +3007,8 @@ class UsageApp:
 
         def axis_label(epoch: float) -> str:
             local = datetime.fromtimestamp(epoch).astimezone()
+            if self.stats_period_hours < 1:
+                return local.strftime("%I:%M %p").lstrip("0")
             if self.stats_period_hours <= 24:
                 return local.strftime("%I %p").lstrip("0")
             return local.strftime("%b %d")
@@ -3191,9 +3229,9 @@ class UsageApp:
         for timestamp, change_type, _value in self._context_changes(points):
             x = left + clamp((timestamp - start_time) / span, 0, 1) * (right - left)
             if change_type == "model":
-                color, width, dash, offset = COLORS["amber"], 2, (), -1.0
+                color, width, dash, offset, stipple = COLORS["amber"], 1, (), -0.5, "gray50"
             else:
-                color, width, dash, offset = COLORS["coral"], 1, (3, 2), 1.0
+                color, width, dash, offset, stipple = COLORS["coral"], 1, (2, 4), 0.5, "gray50"
             marker_x = x + offset
             canvas.create_line(
                 marker_x,
@@ -3203,17 +3241,19 @@ class UsageApp:
                 fill=color,
                 width=width,
                 dash=dash,
+                stipple=stipple,
                 tags=("stats-context-marker", f"stats-{change_type}-marker"),
             )
             canvas.create_polygon(
-                marker_x - 4,
+                marker_x - 3,
                 top + 1,
-                marker_x + 4,
+                marker_x + 3,
                 top + 1,
                 marker_x,
-                top + 7,
+                top + 5,
                 fill=color,
                 outline="",
+                stipple=stipple,
                 tags=("stats-context-marker", f"stats-{change_type}-marker"),
             )
 
@@ -3615,15 +3655,32 @@ class UsageApp:
         canvas_width = max(640, int(canvas.winfo_width()))
         canvas_height = max(560, int(canvas.winfo_height()))
 
-        usage_points = self.history.chart_points(self.stats_period_hours)
+        end_time = time.time()
+        start_time = end_time - self.stats_period_hours * 3600
+        rate_context_hours = max(self.stats_period_hours, RATE_WINDOW_MINUTES / 60)
+        rate_context_points = self.history.chart_points(rate_context_hours)
+        usage_points = [point for point in rate_context_points if point["timestamp"] >= start_time]
         self.stats_usage_points = usage_points
-        rate_points = self.history.rate_series(self.stats_period_hours, usage_points)
-        five_hour_rate_points = self.history.rate_series(
-            self.stats_period_hours,
-            usage_points,
-            value_field="five_hour_used_percent",
-        )
-        token_rate_points = self.history.token_rate_series(self.stats_period_hours, usage_points)
+        self.stats_rate_context_points = rate_context_points
+        rate_points = [
+            point
+            for point in self.history.rate_series(rate_context_hours, rate_context_points)
+            if point["timestamp"] >= start_time
+        ]
+        five_hour_rate_points = [
+            point
+            for point in self.history.rate_series(
+                rate_context_hours,
+                rate_context_points,
+                value_field="five_hour_used_percent",
+            )
+            if point["timestamp"] >= start_time
+        ]
+        token_rate_points = [
+            point
+            for point in self.history.token_rate_series(rate_context_hours, rate_context_points)
+            if point["timestamp"] >= start_time
+        ]
         current = usage_points[-1]["used_percent"] if usage_points else self.snapshot.used_percent
         five_hour_points = [point for point in usage_points if number(point.get("five_hour_used_percent")) is not None]
         five_hour_current = five_hour_points[-1]["five_hour_used_percent"] if five_hour_points else self.snapshot.five_hour_used_percent
@@ -3640,10 +3697,10 @@ class UsageApp:
         if current_tokens is None:
             token_points = [point for point in usage_points if number(point.get("total_tokens")) is not None]
             current_tokens = token_points[-1]["total_tokens"] if token_points else None
-        tokens_per_point = self.history.token_efficiency(self.stats_period_hours, usage_points)
+        tokens_per_point = self.history.token_efficiency(rate_context_hours, rate_context_points)
         five_hour_tokens_per_point = self.history.token_efficiency(
-            self.stats_period_hours,
-            usage_points,
+            rate_context_hours,
+            rate_context_points,
             value_field="five_hour_used_percent",
             resets_field="five_hour_resets_at",
         )
@@ -3666,6 +3723,8 @@ class UsageApp:
 
         def axis_label(epoch: float) -> str:
             local = datetime.fromtimestamp(epoch).astimezone()
+            if self.stats_period_hours < 1:
+                return local.strftime("%I:%M %p").lstrip("0")
             if self.stats_period_hours <= 24:
                 return local.strftime("%I %p").lstrip("0")
             return f"{local.strftime('%b %d')} {local.strftime('%I %p').lstrip('0')}"
@@ -3727,8 +3786,6 @@ class UsageApp:
             self.stats_card_label_items.append(label_item)
             self.stats_card_value_items.append(value_item)
 
-        start_time = time.time() - self.stats_period_hours * 3600
-        end_time = time.time()
         span = max(1, end_time - start_time)
         left, right = 50, max(250, canvas_width - 64)
         self.stats_plot_start = start_time
@@ -3775,31 +3832,12 @@ class UsageApp:
         def x_for(epoch: float) -> float:
             return left + clamp((epoch - start_time) / span, 0, 1) * (right - left)
 
-        gap_threshold_seconds = max(
-            ACTIVE_SIGNAL_MAX_AGE_SECONDS,
-            self.settings.refresh_interval_seconds * 3,
-        )
-        recording_gap_starts = [
-            current["timestamp"]
-            for previous, current in zip(usage_points, usage_points[1:])
-            if current["timestamp"] - previous["timestamp"] > gap_threshold_seconds
-        ]
+        def draw_continuous_recorded_path(points: list[dict[str, Any]], y_for: Any, color: str) -> None:
+            """Connect recorded active points without inventing intermediate selectable samples."""
 
-        def crosses_recording_gap(previous_timestamp: float, current_timestamp: float) -> bool:
-            gap_index = bisect_right(recording_gap_starts, previous_timestamp)
-            return gap_index < len(recording_gap_starts) and recording_gap_starts[gap_index] <= current_timestamp
-
-        def draw_recorded_segments(points: list[dict[str, Any]], y_for: Any, color: str) -> None:
             coordinates: list[float] = []
-            previous_timestamp: Optional[float] = None
             for point in points:
-                timestamp = point["timestamp"]
-                if previous_timestamp is not None and crosses_recording_gap(previous_timestamp, timestamp):
-                    if len(coordinates) >= 4:
-                        canvas.create_line(*coordinates, fill=color, width=3)
-                    coordinates = []
-                coordinates.extend((x_for(timestamp), y_for(point)))
-                previous_timestamp = timestamp
+                coordinates.extend((x_for(point["timestamp"]), y_for(point)))
             if len(coordinates) >= 4:
                 canvas.create_line(*coordinates, fill=color, width=3)
 
@@ -3819,13 +3857,7 @@ class UsageApp:
             fill=COLORS["muted"],
             font=("Segoe UI", 8),
         )
-        if self.stats_period_hours == 1:
-            scope_label = "1 HOUR"
-        elif self.stats_period_hours % 24 == 0:
-            days = self.stats_period_hours // 24
-            scope_label = f"{days} DAY" if days == 1 else f"{days} DAYS"
-        else:
-            scope_label = f"{self.stats_period_hours} HOURS"
+        scope_label = format_statistics_span(self.stats_period_hours)
         canvas.create_text(
             18,
             card_layout["history_subtitle_y"],
@@ -3837,7 +3869,7 @@ class UsageApp:
         canvas.create_text(
             canvas_width - 18,
             card_layout["history_subtitle_y"],
-            text="solid amber = model · dashed coral = effort · no backfilled context",
+            text="subtle amber = model · subtle coral dash = effort · no backfilled context",
             anchor="e",
             fill=COLORS["muted"],
             font=("Segoe UI", 8),
@@ -3957,7 +3989,7 @@ class UsageApp:
             decimals = 0 if rate_scale >= 100 else 1
             canvas.create_text(canvas_width - 10, y, text=f"{sign}{value:.{decimals}f}", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         if rate_points:
-            draw_recorded_segments(
+            draw_continuous_recorded_path(
                 rate_points,
                 lambda point: rate_top
                 + ((rate_scale - clamp(point["rate_per_hour"], 0, rate_scale)) / rate_scale)
@@ -3965,7 +3997,7 @@ class UsageApp:
                 COLORS["violet"],
             )
         if five_hour_rate_points:
-            draw_recorded_segments(
+            draw_continuous_recorded_path(
                 five_hour_rate_points,
                 lambda point: rate_top
                 + ((rate_scale - clamp(point["rate_per_hour"], 0, rate_scale)) / rate_scale)
