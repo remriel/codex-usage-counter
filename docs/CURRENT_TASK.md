@@ -24,8 +24,8 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - Usage cards have stronger value typography than pace and token cards; pane headings contain their own direct series keys, removing the detached color legend.
 - Daily Pace now uses two directly labeled zero-baseline lanes with independently rounded scales: 5-hour average pace and weekly average pace. Every Daily series—usage, pace, and token activity—uses full-day bars with no connected data lines. This keeps the values in points per hour while making the smaller weekly day-to-day changes legible instead of flattening them against the regular 0–20/hour scale.
 - Statistics now adapts its summary grid to the available width: narrow windows retain three 42-pixel rows of four cards, while wide/fullscreen Statistics uses two rows of six cards. The wide layout starts the chart panes at `y=146` rather than `y=192`, and uses tighter pane gaps plus a smaller token allocation to give the actual chart areas substantially more height.
-- Statistics now has three intentional views: Hourly, Daily, and Weekly. Hourly opens by default at one hour and zooms in/out with the mouse wheel through all retained history; Daily and Weekly aggregate calendar-aligned bars.
-- Model and reasoning-effort metadata is saved with new local usage samples and annotated only on the detailed Hourly timeline: solid amber indicates a model transition and dashed coral indicates an effort transition. The selected-point readout shows the active context.
+- Statistics now has three intentional views: Hourly, Daily, and Weekly. Hourly opens by default at one hour and mouse-wheel zooms through readable stops down to one minute and out through all retained history; Daily and Weekly aggregate calendar-aligned bars.
+- Model and reasoning-effort metadata is saved with new local usage samples and annotated only on the detailed Hourly timeline: thin, subtle amber indicates a model transition and thin, subtle dashed coral indicates an effort transition. The selected-point readout shows the active context.
 
 ## Decisions
 
@@ -51,6 +51,7 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - On wide displays, prioritize the charts with a 6×2 card grid; preserve the 4×3 layout below 1,100 canvas pixels so card labels and selected values remain readable.
 - Treat model and effort as timestamped explanatory context—not usage metrics—so their markers never affect allowance, rate, token, or ETA calculations. Do not backfill markers into historical samples that predate metadata collection.
 - Use one targeted full metadata scan for an active session only if the fast file-tail reader has no model/effort context; cache the result and keep normal append updates lightweight.
+- Keep real wall-clock positions and recorded samples, but connect consecutive recorded pace points across inactive intervals so the Hourly paths remain visually continuous. Do not create synthetic history points or selectable values inside those intervals.
 
 ## Relevant files
 
@@ -108,6 +109,10 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - Context-marker, Weekly aggregation, Hourly zoom, compilation, and diff checks passed. A synthetic 1,440-pixel Tk Canvas render produced 4 context-marker elements, 262 Hourly usage bars, 12 Weekly usage bars, and 12 Weekly pace bars.
 - Mouse-wheel QA passed: wheel up narrows the Hourly time span, wheel down widens it, and Daily/Weekly preserve their bar selection behavior. The former Zoom buttons were removed.
 - The focused-view/context-marker production build was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`; its SHA-256 matches the current build (`FE75BABB662619E40D8417450ACF061F720E673542A07C9BF88F29E9CF1459D6`) and the normal two-process packaged app launched successfully.
+- Tight-zoom QA passed through `1 hour → 30 → 15 → 10 → 5 → 3 → 2 → 1 minute`; labels display minute units correctly, and the rate/token calculations retain their preceding 45-minute context when the visible window is smaller.
+- Native Tk accepted the one-pixel `gray50` stipple treatment for both context-marker lines and their smaller top indicators. Model remains amber and effort remains dashed coral.
+- A full synthetic Statistics render with two active clusters separated by a large wall-clock interval produced exactly one cyan and one violet pace path spanning both clusters. The path crosses the inactive interval visually while the plot and selection data still contain only real recorded points.
+- The tighter-zoom/subtle-marker/continuous-path production build was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`; its SHA-256 matches the build (`DBF1139D0FD05CCEBCA26AC125E0E597321E3839CFB72EB6391C2F832717B894`) and the normal two-process packaged app launched successfully.
 
 ## Next steps
 
