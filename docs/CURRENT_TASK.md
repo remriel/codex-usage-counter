@@ -2,7 +2,7 @@
 
 ## Objective
 
-Make Statistics visually cohesive and immediately understandable after the usage-history change from lines to bars.
+Make Statistics visually cohesive and immediately understandable, including model/effort context and a focused three-view navigation model.
 
 ## Current state
 
@@ -24,6 +24,8 @@ Make Statistics visually cohesive and immediately understandable after the usage
 - Usage cards have stronger value typography than pace and token cards; pane headings contain their own direct series keys, removing the detached color legend.
 - Daily Pace now uses two directly labeled zero-baseline lanes with independently rounded scales: 5-hour average pace and weekly average pace. Every Daily series—usage, pace, and token activity—uses full-day bars with no connected data lines. This keeps the values in points per hour while making the smaller weekly day-to-day changes legible instead of flattening them against the regular 0–20/hour scale.
 - Statistics now adapts its summary grid to the available width: narrow windows retain three 42-pixel rows of four cards, while wide/fullscreen Statistics uses two rows of six cards. The wide layout starts the chart panes at `y=146` rather than `y=192`, and uses tighter pane gaps plus a smaller token allocation to give the actual chart areas substantially more height.
+- Statistics now has three intentional views: Hourly, Daily, and Weekly. Hourly opens by default at one hour and zooms in/out with the mouse wheel through all retained history; Daily and Weekly aggregate calendar-aligned bars.
+- Model and reasoning-effort metadata is saved with new local usage samples and annotated only on the detailed Hourly timeline: solid amber indicates a model transition and dashed coral indicates an effort transition. The selected-point readout shows the active context.
 
 ## Decisions
 
@@ -47,6 +49,8 @@ Make Statistics visually cohesive and immediately understandable after the usage
 - In Daily Pace only, scale each allowance independently from zero with modest headroom and directly display its scale in its own lane. Use the same scale/lane map for the rendered daily bars and selected-point marker; keep every Daily metric bar-based and do not draw connected data lines.
 - Keep summary-card geometry centralized and shared between Daily and intraday renderers so chart-space allocation, hierarchy, and selection behavior stay consistent across every Statistics interval.
 - On wide displays, prioritize the charts with a 6×2 card grid; preserve the 4×3 layout below 1,100 canvas pixels so card labels and selected values remain readable.
+- Treat model and effort as timestamped explanatory context—not usage metrics—so their markers never affect allowance, rate, token, or ETA calculations. Do not backfill markers into historical samples that predate metadata collection.
+- Use one targeted full metadata scan for an active session only if the fast file-tail reader has no model/effort context; cache the result and keep normal append updates lightweight.
 
 ## Relevant files
 
@@ -100,6 +104,10 @@ Make Statistics visually cohesive and immediately understandable after the usage
 - Responsive layout QA passed: at 1,440 canvas pixels, all 12 cards render as a 6×2 grid, the chart panes begin at `y=146`, and the three panes remain non-overlapping. At 1,000 pixels, the app keeps the 4×3 fallback and `y=192` chart origin. `python -m py_compile codex_usage_counter.py` and `git diff --check` passed.
 - The wider-chart production build was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`; its SHA-256 matches the current build (`A0D0304459C70C20A246E862BB761AA298D97EA34CEA564E5C596646DF717ACA`) and the normal two-process packaged app launched successfully.
 - Moved the one remaining confirmed prior delivery executable—`2026-08-09\https-github-com-remriel-codex-usage\work\codex-usage-counter\dist\CodexUsageCounter.exe`—to the Recycle Bin. Its hash differed from the current install; the follow-up delivery scan retains only the current installed executable and the matching current source-build artifact.
+- Metadata fixture QA verified model/effort extraction from `turn_context` and `thread_settings`, including a later effort change without a new allowance event. A real local read returned nonempty model/effort metadata consistently after the targeted metadata fallback scan.
+- Context-marker, Weekly aggregation, Hourly zoom, compilation, and diff checks passed. A synthetic 1,440-pixel Tk Canvas render produced 4 context-marker elements, 262 Hourly usage bars, 12 Weekly usage bars, and 12 Weekly pace bars.
+- Mouse-wheel QA passed: wheel up narrows the Hourly time span, wheel down widens it, and Daily/Weekly preserve their bar selection behavior. The former Zoom buttons were removed.
+- The focused-view/context-marker production build was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`; its SHA-256 matches the current build (`FE75BABB662619E40D8417450ACF061F720E673542A07C9BF88F29E9CF1459D6`) and the normal two-process packaged app launched successfully.
 
 ## Next steps
 
