@@ -99,6 +99,7 @@ Make Statistics visually cohesive and immediately understandable after the usage
 - The compact-card/taller-chart production build was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`; its SHA-256 matches the current build (`66CAC57F4ED95DDB1BA0CE162AC2C3F15EF2EB688636A0C080FA1A3D6405DE53`) and the normal two-process packaged app launched successfully. The replacement happened in place; a fresh delivery scan found no versioned or separately named previous executable/archive.
 - Responsive layout QA passed: at 1,440 canvas pixels, all 12 cards render as a 6×2 grid, the chart panes begin at `y=146`, and the three panes remain non-overlapping. At 1,000 pixels, the app keeps the 4×3 fallback and `y=192` chart origin. `python -m py_compile codex_usage_counter.py` and `git diff --check` passed.
 - The wider-chart production build was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`; its SHA-256 matches the current build (`A0D0304459C70C20A246E862BB761AA298D97EA34CEA564E5C596646DF717ACA`) and the normal two-process packaged app launched successfully.
+- Moved the one remaining confirmed prior delivery executable—`2026-08-09\https-github-com-remriel-codex-usage\work\codex-usage-counter\dist\CodexUsageCounter.exe`—to the Recycle Bin. Its hash differed from the current install; the follow-up delivery scan retains only the current installed executable and the matching current source-build artifact.
 
 ## Next steps
 
