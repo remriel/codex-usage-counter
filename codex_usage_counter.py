@@ -50,9 +50,10 @@ STATS_CARD_HEIGHT = 42.0
 STATS_CARD_ROW_GAP = 4.0
 STATS_CARD_LABEL_OFFSET_Y = 11.0
 STATS_CARD_VALUE_OFFSET_Y = 29.0
-STATS_HISTORY_TITLE_Y = 160.0
-STATS_HISTORY_SUBTITLE_Y = 175.0
 STATS_PLOT_TOP = 192.0
+STATS_WIDE_MIN_WIDTH = 1100
+STATS_WIDE_CARD_COLUMNS = 6
+STATS_NARROW_CARD_COLUMNS = 4
 
 COLORS = {
     "ink": "#0d1224",
@@ -2689,17 +2690,39 @@ class UsageApp:
             x = left + fraction * (right - left)
             canvas.create_text(x, bottom + 18, text=axis_label(start_time + fraction * span), fill=COLORS["muted"], font=("Segoe UI", 8))
 
-    def _statistics_pane_geometry(self, canvas_height: int) -> dict[str, float]:
+    def _statistics_card_layout(self, canvas_width: int, card_count: int) -> dict[str, float]:
+        """Keep summary cards compact on wide screens so the charts stay primary."""
+
+        columns = STATS_WIDE_CARD_COLUMNS if canvas_width >= STATS_WIDE_MIN_WIDTH else STATS_NARROW_CARD_COLUMNS
+        columns = min(columns, max(1, card_count))
+        rows = max(1, math.ceil(card_count / columns))
+        card_margin = 14.0
+        card_gap = 10.0
+        card_width = (canvas_width - card_margin * 2 - card_gap * (columns - 1)) / columns
+        cards_bottom = STATS_CARD_TOP + rows * STATS_CARD_HEIGHT + (rows - 1) * STATS_CARD_ROW_GAP
+        history_title_y = cards_bottom + 16.0
+        history_subtitle_y = history_title_y + 15.0
+
+        return {
+            "columns": float(columns),
+            "card_margin": card_margin,
+            "card_gap": card_gap,
+            "card_width": card_width,
+            "history_title_y": history_title_y,
+            "history_subtitle_y": history_subtitle_y,
+            "plot_top": history_subtitle_y + 17.0,
+        }
+
+    def _statistics_pane_geometry(self, canvas_height: int, plot_top: float = STATS_PLOT_TOP) -> dict[str, float]:
         """Lay out the three linked Statistics panes within the available canvas."""
 
-        plot_top = STATS_PLOT_TOP
         plot_bottom = float(max(620, canvas_height - 34))
-        pane_gap = 26.0
-        pane_header = 18.0
+        pane_gap = 16.0
+        pane_header = 16.0
         available_height = plot_bottom - plot_top
-        token_pane_height = max(80.0, available_height * 0.22)
+        token_pane_height = max(72.0, available_height * 0.20)
         primary_height = available_height - token_pane_height - pane_gap * 2
-        usage_pane_height = primary_height * 0.58
+        usage_pane_height = primary_height * 0.54
         rate_pane_height = primary_height - usage_pane_height
 
         usage_pane_top = plot_top
@@ -2935,36 +2958,40 @@ class UsageApp:
                 ("SAMPLES · RECORDED SPAN", "--", COLORS["soft"]),
             ),
         )
-        card_margin = 14
-        card_gap = 10
-        card_width = (canvas_width - card_margin * 2 - card_gap * 3) / 4
+        cards = [card for group in card_groups for card in group]
+        card_layout = self._statistics_card_layout(canvas_width, len(cards))
+        card_margin = card_layout["card_margin"]
+        card_gap = card_layout["card_gap"]
+        card_width = card_layout["card_width"]
+        card_columns = int(card_layout["columns"])
         self.stats_card_label_items = []
         self.stats_card_value_items = []
-        for row_index, cards in enumerate(card_groups):
+        for card_index, (label, value, color) in enumerate(cards):
+            row_index = card_index // card_columns
+            column_index = card_index % card_columns
             y1 = STATS_CARD_TOP + row_index * (STATS_CARD_HEIGHT + STATS_CARD_ROW_GAP)
             y2 = y1 + STATS_CARD_HEIGHT
-            for index, (label, value, color) in enumerate(cards):
-                x1 = card_margin + index * (card_width + card_gap)
-                x2 = x1 + card_width
-                canvas.create_rectangle(x1, y1, x2, y2, fill=COLORS["panel_raised"], outline=COLORS["line"])
-                label_item = canvas.create_text(
-                    x1 + 12,
-                    y1 + STATS_CARD_LABEL_OFFSET_Y,
-                    text=label,
-                    anchor="w",
-                    fill=COLORS["muted"],
-                    font=("Segoe UI", 7, "bold"),
-                )
-                value_item = canvas.create_text(
-                    x1 + 12,
-                    y1 + STATS_CARD_VALUE_OFFSET_Y,
-                    text=value,
-                    anchor="w",
-                    fill=color,
-                    font=("Segoe UI", 12 if row_index == 0 else 10, "bold"),
-                )
-                self.stats_card_label_items.append(label_item)
-                self.stats_card_value_items.append(value_item)
+            x1 = card_margin + column_index * (card_width + card_gap)
+            x2 = x1 + card_width
+            canvas.create_rectangle(x1, y1, x2, y2, fill=COLORS["panel_raised"], outline=COLORS["line"])
+            label_item = canvas.create_text(
+                x1 + 12,
+                y1 + STATS_CARD_LABEL_OFFSET_Y,
+                text=label,
+                anchor="w",
+                fill=COLORS["muted"],
+                font=("Segoe UI", 7, "bold"),
+            )
+            value_item = canvas.create_text(
+                x1 + 12,
+                y1 + STATS_CARD_VALUE_OFFSET_Y,
+                text=value,
+                anchor="w",
+                fill=color,
+                font=("Segoe UI", 12 if card_index < 4 else 10, "bold"),
+            )
+            self.stats_card_label_items.append(label_item)
+            self.stats_card_value_items.append(value_item)
 
         now_local = datetime.now().astimezone()
         today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -2984,7 +3011,7 @@ class UsageApp:
 
         canvas.create_text(
             18,
-            STATS_HISTORY_TITLE_Y,
+            card_layout["history_title_y"],
             text="DAILY HISTORY",
             anchor="w",
             fill=COLORS["soft"],
@@ -2992,7 +3019,7 @@ class UsageApp:
         )
         canvas.create_text(
             canvas_width - 18,
-            STATS_HISTORY_TITLE_Y,
+            card_layout["history_title_y"],
             text="one day per bar · select any day to update the cards",
             anchor="e",
             fill=COLORS["muted"],
@@ -3000,7 +3027,7 @@ class UsageApp:
         )
         canvas.create_text(
             18,
-            STATS_HISTORY_SUBTITLE_Y,
+            card_layout["history_subtitle_y"],
             text=f"LAST {HISTORY_RETENTION_DAYS} CALENDAR DAYS",
             anchor="w",
             fill=COLORS["muted"],
@@ -3008,14 +3035,14 @@ class UsageApp:
         )
         canvas.create_text(
             canvas_width - 18,
-            STATS_HISTORY_SUBTITLE_Y,
+            card_layout["history_subtitle_y"],
             text="missing days stay blank; totals use recorded reset-aware increases",
             anchor="e",
             fill=COLORS["muted"],
             font=("Segoe UI", 8),
         )
 
-        geometry = self._statistics_pane_geometry(canvas_height)
+        geometry = self._statistics_pane_geometry(canvas_height, card_layout["plot_top"])
         usage_top = geometry["usage_top"]
         usage_bottom = geometry["usage_bottom"]
         rate_top = geometry["rate_top"]
@@ -3288,36 +3315,40 @@ class UsageApp:
                 COLORS["mint"],
             ),
         ]
-        card_margin = 14
-        card_gap = 10
-        card_width = (canvas_width - card_margin * 2 - card_gap * 3) / 4
+        cards = usage_cards + pace_cards + token_cards
+        card_layout = self._statistics_card_layout(canvas_width, len(cards))
+        card_margin = card_layout["card_margin"]
+        card_gap = card_layout["card_gap"]
+        card_width = card_layout["card_width"]
+        card_columns = int(card_layout["columns"])
         self.stats_card_label_items = []
         self.stats_card_value_items = []
-        for row_index, cards in enumerate((usage_cards, pace_cards, token_cards)):
+        for card_index, (label, value, color) in enumerate(cards):
+            row_index = card_index // card_columns
+            column_index = card_index % card_columns
             y1 = STATS_CARD_TOP + row_index * (STATS_CARD_HEIGHT + STATS_CARD_ROW_GAP)
             y2 = y1 + STATS_CARD_HEIGHT
-            for index, (label, value, color) in enumerate(cards):
-                x1 = card_margin + index * (card_width + card_gap)
-                x2 = x1 + card_width
-                canvas.create_rectangle(x1, y1, x2, y2, fill=COLORS["panel_raised"], outline=COLORS["line"])
-                label_item = canvas.create_text(
-                    x1 + 12,
-                    y1 + STATS_CARD_LABEL_OFFSET_Y,
-                    text=label,
-                    anchor="w",
-                    fill=COLORS["muted"],
-                    font=("Segoe UI", 7, "bold"),
-                )
-                value_item = canvas.create_text(
-                    x1 + 12,
-                    y1 + STATS_CARD_VALUE_OFFSET_Y,
-                    text=value,
-                    anchor="w",
-                    fill=color,
-                    font=("Segoe UI", 12 if row_index == 0 else 10, "bold"),
-                )
-                self.stats_card_label_items.append(label_item)
-                self.stats_card_value_items.append(value_item)
+            x1 = card_margin + column_index * (card_width + card_gap)
+            x2 = x1 + card_width
+            canvas.create_rectangle(x1, y1, x2, y2, fill=COLORS["panel_raised"], outline=COLORS["line"])
+            label_item = canvas.create_text(
+                x1 + 12,
+                y1 + STATS_CARD_LABEL_OFFSET_Y,
+                text=label,
+                anchor="w",
+                fill=COLORS["muted"],
+                font=("Segoe UI", 7, "bold"),
+            )
+            value_item = canvas.create_text(
+                x1 + 12,
+                y1 + STATS_CARD_VALUE_OFFSET_Y,
+                text=value,
+                anchor="w",
+                fill=color,
+                font=("Segoe UI", 12 if card_index < 4 else 10, "bold"),
+            )
+            self.stats_card_label_items.append(label_item)
+            self.stats_card_value_items.append(value_item)
 
         start_time = time.time() - self.stats_period_hours * 3600
         end_time = time.time()
@@ -3395,7 +3426,7 @@ class UsageApp:
 
         canvas.create_text(
             18,
-            STATS_HISTORY_TITLE_Y,
+            card_layout["history_title_y"],
             text="LIVE HISTORY",
             anchor="w",
             fill=COLORS["soft"],
@@ -3403,7 +3434,7 @@ class UsageApp:
         )
         canvas.create_text(
             canvas_width - 18,
-            STATS_HISTORY_TITLE_Y,
+            card_layout["history_title_y"],
             text="select a point to update every card",
             anchor="e",
             fill=COLORS["muted"],
@@ -3415,7 +3446,7 @@ class UsageApp:
         )
         canvas.create_text(
             18,
-            STATS_HISTORY_SUBTITLE_Y,
+            card_layout["history_subtitle_y"],
             text=f"LAST {scope_label}",
             anchor="w",
             fill=COLORS["muted"],
@@ -3423,14 +3454,14 @@ class UsageApp:
         )
         canvas.create_text(
             canvas_width - 18,
-            STATS_HISTORY_SUBTITLE_Y,
+            card_layout["history_subtitle_y"],
             text="5-hour history begins when Codex reports it; no backfilled values",
             anchor="e",
             fill=COLORS["muted"],
             font=("Segoe UI", 8),
         )
 
-        geometry = self._statistics_pane_geometry(canvas_height)
+        geometry = self._statistics_pane_geometry(canvas_height, card_layout["plot_top"])
         usage_top = geometry["usage_top"]
         usage_bottom = geometry["usage_bottom"]
         rate_top = geometry["rate_top"]
