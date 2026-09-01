@@ -6,7 +6,7 @@ Make Statistics visually cohesive and immediately understandable, including mode
 
 ## Current state
 
-- Branch: `agent/compress-inactive-chart-time`
+- Branch: `agent/restore-overlaid-pace`
 - Base commit: `93ab1bf` (`Track Codex token usage in real time`)
 - Local telemetry now reports a 300-minute primary window and a 10,080-minute secondary window.
 - The old v1.1.15 executable selects `primary` blindly, causing it to show 5-hour usage as if it were weekly.
@@ -27,7 +27,8 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - Statistics now has three intentional views: Hourly, Daily, and Weekly. Hourly opens by default at one hour and mouse-wheel zooms through readable stops down to one minute and out through all retained history; Daily and Weekly aggregate calendar-aligned bars.
 - Model and reasoning-effort metadata is saved with new local usage samples and annotated only on the detailed Hourly timeline: thin, subtle amber indicates a model transition and thin, subtle dashed coral indicates an effort transition. The selected-point readout shows the active context.
 - Hourly now removes long idle spans from the horizontal layout while breaking each pace path at the activity boundary, so sessions sit together without false straight connectors.
-- Hourly pace is split into stacked 5-hour and weekly panes with separate Y-axes. Weekly is fixed at 0–100 pts/hr; 5-hour remains independently data-scaled.
+- Hourly overlays 5-hour and weekly pace in one pane with separate color-coded Y-axes. Weekly is fixed at 0–100 pts/hr; 5-hour remains independently data-scaled.
+- The overlaid-pace production executable is installed and running; the existing public screenshots are intentionally unchanged for this release.
 
 ## Decisions
 
@@ -54,7 +55,7 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - Treat model and effort as timestamped explanatory context—not usage metrics—so their markers never affect allowance, rate, token, or ETA calculations. Do not backfill markers into historical samples that predate metadata collection.
 - Use one targeted full metadata scan for an active session only if the fast file-tail reader has no model/effort context; cache the result and keep normal append updates lightweight.
 - Keep real timestamps and recorded samples, but render Hourly on a compressed active-time x-axis: collapse inactivity longer than the 10-minute local-signal freshness limit to effectively zero horizontal duration, show a small `//` boundary mark, and keep pace paths segmented so sessions are adjacent without false connecting lines. Do not use raw session-file IDs as boundaries because multiple local files can alternate while Codex is continuously active.
-- Keep Hourly usage on the shared 0–100% scale. Render 5-hour and weekly pace in separate stacked panes with separate Y-axes because 5-hour pace can be orders of magnitude larger; do not overlap the two pace paths. Fix the Hourly weekly pace Y-axis at 0–100 pts/hr while keeping the 5-hour pace axis independently data-scaled.
+- Keep Hourly usage on the shared 0–100% scale. Overlay 5-hour and weekly pace in one pane so timing changes are easy to compare, but map them to separate color-coded Y-axes because 5-hour pace can be orders of magnitude larger. Fix the Hourly weekly pace Y-axis at 0–100 pts/hr while keeping the 5-hour pace axis independently data-scaled. Preserve session-aware path breaks so the shared pane never implies measurements across inactivity.
 
 ## Relevant files
 
@@ -121,7 +122,8 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - The screenshot-corrected session-gap production build was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`; its SHA-256 matches the build (`EFF21E6821F976535F7F1C3789BDEDC60F6DFD5E8148B8D2A1CA926C20FE0FE3`) and the normal two-process packaged app launched successfully.
 - The final active-time/separate-pace-pane PyInstaller build completed successfully and was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`. Its installed SHA-256 matches the build (`F6CB95D658C95F414B5C624549E46981E53D5749E3C10BCCC0785880D36C06B6`), and the normal parent/child packaged process pair launched.
 - `screenshots\counter.png` was refreshed from the running app. `screenshots\statistics.png` uses the exact Statistics image supplied by the user for this release.
+- The overlaid-pace PyInstaller production build completed successfully. The installed executable matches the build (`A6AD7578089382FBCB020708836B41D771B1AEBF81FC0FDAB3ABF8BA8C3AC592`) and the normal packaged parent/child process pair is running. No older versioned executable or source archive remains under Desktop, Downloads, or Documents. GitHub screenshot files were not changed.
 
 ## Next steps
 
-1. Keep public screenshots and README copy synchronized with future UI releases.
+1. Manually inspect the published overlaid pace pane and report any desired visual adjustments in a new task.
