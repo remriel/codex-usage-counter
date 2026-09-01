@@ -1901,10 +1901,6 @@ class UsageApp:
         self.stats_rate_bottom = 508
         self.stats_rate_scale = 1.0
         self.stats_rate_scales: dict[str, float] = {"five_hour": 1.0, "weekly": 1.0}
-        self.stats_rate_lanes: dict[str, tuple[float, float]] = {
-            "five_hour": (343.0, 421.0),
-            "weekly": (429.0, 508.0),
-        }
         self.stats_daily_rate_scales: dict[str, float] = {"five_hour": 1.0, "weekly": 1.0}
         self.stats_daily_rate_lanes: dict[str, tuple[float, float]] = {
             "five_hour": (343.0, 421.0),
@@ -2890,14 +2886,10 @@ class UsageApp:
             )
         if rate is not None:
             weekly_rate_scale = self.stats_rate_scales.get("weekly", self.stats_rate_scale)
-            weekly_rate_top, weekly_rate_bottom = self.stats_rate_lanes.get(
-                "weekly",
-                (self.stats_rate_top, self.stats_rate_bottom),
-            )
             plotted_rate = clamp(rate, 0, weekly_rate_scale)
-            rate_y = weekly_rate_top + (
+            rate_y = self.stats_rate_top + (
                 (weekly_rate_scale - plotted_rate) / weekly_rate_scale
-            ) * (weekly_rate_bottom - weekly_rate_top)
+            ) * (self.stats_rate_bottom - self.stats_rate_top)
             canvas.create_oval(
                 x - 5,
                 rate_y - 5,
@@ -2924,14 +2916,10 @@ class UsageApp:
             )
         if five_hour_rate is not None:
             five_hour_rate_scale = self.stats_rate_scales.get("five_hour", self.stats_rate_scale)
-            five_hour_rate_top, five_hour_rate_bottom = self.stats_rate_lanes.get(
-                "five_hour",
-                (self.stats_rate_top, self.stats_rate_bottom),
-            )
             plotted_five_hour_rate = clamp(five_hour_rate, 0, five_hour_rate_scale)
-            five_hour_rate_y = five_hour_rate_top + (
+            five_hour_rate_y = self.stats_rate_top + (
                 (five_hour_rate_scale - plotted_five_hour_rate) / five_hour_rate_scale
-            ) * (five_hour_rate_bottom - five_hour_rate_top)
+            ) * (self.stats_rate_bottom - self.stats_rate_top)
             canvas.create_oval(
                 x - 5,
                 five_hour_rate_y - 5,
@@ -3116,7 +3104,7 @@ class UsageApp:
 
         panes = (
             ("usage", usage_label, COLORS["soft"]),
-            ("rate", "PACE · 5-HOUR AND WEEKLY — SEPARATE Y-AXES", COLORS["soft"]),
+            ("rate", "PACE · OVERLAID — INDEPENDENT Y-AXES", COLORS["soft"]),
             ("token", token_label, COLORS["mint"]),
         )
         for key, label, color in panes:
@@ -3140,7 +3128,7 @@ class UsageApp:
                 fill=color,
                 font=("Segoe UI", 8, "bold"),
             )
-            if key == "usage":
+            if key in ("usage", "rate"):
                 canvas.create_text(
                     right - 76,
                     pane_top + 10,
@@ -3350,68 +3338,6 @@ class UsageApp:
                 text="0/hr",
                 anchor="se",
                 fill=COLORS["muted"],
-                font=("Segoe UI", 7),
-            )
-        return lanes
-
-    def _draw_statistics_hourly_rate_lanes(
-        self,
-        canvas: tk.Canvas,
-        left: float,
-        right: float,
-        top: float,
-        bottom: float,
-        scales: dict[str, float],
-    ) -> dict[str, tuple[float, float]]:
-        """Keep 5-hour and weekly pace in separate panes with separate Y-axes."""
-
-        lanes = self._statistics_usage_lanes(top, bottom)
-        self.stats_rate_lanes = lanes
-        self.stats_rate_scales = {
-            key: max(0.0001, float(scales.get(key, 1.0)))
-            for key in ("five_hour", "weekly")
-        }
-        for key, label, color in (
-            ("five_hour", "5H", COLORS["cyan"]),
-            ("weekly", "WEEK", COLORS["violet"]),
-        ):
-            lane_top, lane_bottom = lanes[key]
-            scale = self.stats_rate_scales[key]
-            canvas.create_rectangle(
-                left,
-                lane_top,
-                right,
-                lane_bottom,
-                fill=COLORS["panel_raised"],
-                outline=COLORS["line"],
-                width=1,
-                tags=("stats-hourly-rate-lane", f"stats-{key}-hourly-rate-lane"),
-            )
-            canvas.create_text(
-                left - 10,
-                (lane_top + lane_bottom) / 2,
-                text=label,
-                anchor="e",
-                fill=color,
-                font=("Segoe UI", 8, "bold"),
-            )
-            midpoint_y = lane_bottom - 0.5 * (lane_bottom - lane_top)
-            canvas.create_line(left, midpoint_y, right, midpoint_y, fill=COLORS["line"], dash=(3, 5))
-            canvas.create_line(left, lane_bottom, right, lane_bottom, fill=COLORS["soft"], width=1)
-            canvas.create_text(
-                right - 6,
-                lane_top + 2,
-                text=format_rate_axis(scale, scale),
-                anchor="ne",
-                fill=color,
-                font=("Segoe UI", 7),
-            )
-            canvas.create_text(
-                right - 6,
-                lane_bottom - 2,
-                text="0/hr",
-                anchor="se",
-                fill=color,
                 font=("Segoe UI", 7),
             )
         return lanes
@@ -4193,36 +4119,54 @@ class UsageApp:
             "weekly": 100.0,
         }
         self.stats_rate_scale = max(rate_scales.values(), default=1.0)
-        hourly_rate_lanes = self._draw_statistics_hourly_rate_lanes(
-            canvas,
-            left,
-            right,
-            rate_top,
-            rate_bottom,
-            rate_scales,
-        )
+        self.stats_rate_scales = rate_scales
+        for fraction in (1.0, 0.5, 0.0):
+            y = rate_bottom - fraction * (rate_bottom - rate_top)
+            canvas.create_line(
+                left,
+                y,
+                right,
+                y,
+                fill=COLORS["soft"] if fraction == 0.0 else COLORS["line"],
+                width=2 if fraction == 0.0 else 1,
+                dash=() if fraction == 0.0 else (3, 5),
+            )
+            canvas.create_text(
+                left + 7,
+                y,
+                text=format_rate_axis(rate_scales["five_hour"] * fraction, rate_scales["five_hour"]),
+                anchor="w",
+                fill=COLORS["cyan"],
+                font=("Segoe UI", 7),
+            )
+            canvas.create_text(
+                right - 7,
+                y,
+                text=format_rate_axis(rate_scales["weekly"] * fraction, rate_scales["weekly"]),
+                anchor="e",
+                fill=COLORS["violet"],
+                font=("Segoe UI", 7),
+            )
         if rate_points:
-            weekly_rate_top, weekly_rate_bottom = hourly_rate_lanes["weekly"]
             draw_recorded_segments(
                 rate_points,
-                lambda point: weekly_rate_top
+                lambda point: rate_top
                 + (
                     (rate_scales["weekly"] - clamp(point["rate_per_hour"], 0, rate_scales["weekly"]))
                     / rate_scales["weekly"]
                 )
-                * (weekly_rate_bottom - weekly_rate_top),
+                * (rate_bottom - rate_top),
                 COLORS["violet"],
             )
         if five_hour_rate_points:
-            five_hour_rate_top, five_hour_rate_bottom = hourly_rate_lanes["five_hour"]
             draw_recorded_segments(
                 five_hour_rate_points,
-                lambda point: five_hour_rate_top
+                lambda point: rate_top
                 + (
                     (rate_scales["five_hour"] - clamp(point["rate_per_hour"], 0, rate_scales["five_hour"]))
                     / rate_scales["five_hour"]
                 )
-                * (five_hour_rate_bottom - five_hour_rate_top),
+                * (rate_bottom - rate_top),
                 COLORS["cyan"],
             )
         if not rate_points and not five_hour_rate_points:
