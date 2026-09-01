@@ -6,7 +6,7 @@ Make Statistics visually cohesive and immediately understandable, including mode
 
 ## Current state
 
-- Branch: `agent/add-48h-4d-statistics`
+- Branch: `agent/compress-inactive-chart-time`
 - Base commit: `93ab1bf` (`Track Codex token usage in real time`)
 - Local telemetry now reports a 300-minute primary window and a 10,080-minute secondary window.
 - The old v1.1.15 executable selects `primary` blindly, causing it to show 5-hour usage as if it were weekly.
@@ -26,6 +26,8 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - Statistics now adapts its summary grid to the available width: narrow windows retain three 42-pixel rows of four cards, while wide/fullscreen Statistics uses two rows of six cards. The wide layout starts the chart panes at `y=146` rather than `y=192`, and uses tighter pane gaps plus a smaller token allocation to give the actual chart areas substantially more height.
 - Statistics now has three intentional views: Hourly, Daily, and Weekly. Hourly opens by default at one hour and mouse-wheel zooms through readable stops down to one minute and out through all retained history; Daily and Weekly aggregate calendar-aligned bars.
 - Model and reasoning-effort metadata is saved with new local usage samples and annotated only on the detailed Hourly timeline: thin, subtle amber indicates a model transition and thin, subtle dashed coral indicates an effort transition. The selected-point readout shows the active context.
+- Hourly now removes long idle spans from the horizontal layout while breaking each pace path at the activity boundary, so sessions sit together without false straight connectors.
+- Hourly pace is split into stacked 5-hour and weekly panes with separate Y-axes. Weekly is fixed at 0–100 pts/hr; 5-hour remains independently data-scaled.
 
 ## Decisions
 
@@ -51,7 +53,8 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - On wide displays, prioritize the charts with a 6×2 card grid; preserve the 4×3 layout below 1,100 canvas pixels so card labels and selected values remain readable.
 - Treat model and effort as timestamped explanatory context—not usage metrics—so their markers never affect allowance, rate, token, or ETA calculations. Do not backfill markers into historical samples that predate metadata collection.
 - Use one targeted full metadata scan for an active session only if the fast file-tail reader has no model/effort context; cache the result and keep normal append updates lightweight.
-- Keep real wall-clock positions and recorded samples. Treat an Hourly chart session as an active cluster separated by more than the 10-minute local-signal freshness limit; break pace paths across those inactive intervals and rate-reset segments. Do not use raw session-file IDs as visual boundaries because multiple local files can alternate while Codex is continuously active.
+- Keep real timestamps and recorded samples, but render Hourly on a compressed active-time x-axis: collapse inactivity longer than the 10-minute local-signal freshness limit to effectively zero horizontal duration, show a small `//` boundary mark, and keep pace paths segmented so sessions are adjacent without false connecting lines. Do not use raw session-file IDs as boundaries because multiple local files can alternate while Codex is continuously active.
+- Keep Hourly usage on the shared 0–100% scale. Render 5-hour and weekly pace in separate stacked panes with separate Y-axes because 5-hour pace can be orders of magnitude larger; do not overlap the two pace paths. Fix the Hourly weekly pace Y-axis at 0–100 pts/hr while keeping the 5-hour pace axis independently data-scaled.
 
 ## Relevant files
 
@@ -116,6 +119,8 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - A recorded-history audit found 129 raw session-file ID changes among 153 points in one hour, confirming that file IDs are not reliable activity-session boundaries. The renderer instead uses the existing 10-minute signal freshness limit plus rate-reset segments.
 - Screenshot-case Canvas QA passed with three active clusters per allowance series: three cyan and three violet pace paths, blank idle intervals, no path crossing an inactivity boundary, no synthetic samples, and no unnecessary break at a rapid local-file handoff.
 - The screenshot-corrected session-gap production build was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`; its SHA-256 matches the build (`EFF21E6821F976535F7F1C3789BDEDC60F6DFD5E8148B8D2A1CA926C20FE0FE3`) and the normal two-process packaged app launched successfully.
+- The final active-time/separate-pace-pane PyInstaller build completed successfully and was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`. Its installed SHA-256 matches the build (`F6CB95D658C95F414B5C624549E46981E53D5749E3C10BCCC0785880D36C06B6`), and the normal parent/child packaged process pair launched.
+- `screenshots\counter.png` was refreshed from the running app. `screenshots\statistics.png` uses the exact Statistics image supplied by the user for this release.
 
 ## Next steps
 
