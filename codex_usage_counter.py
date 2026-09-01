@@ -152,7 +152,8 @@ def format_rate_axis(value: float, scale: float) -> str:
         decimals = 2
     else:
         decimals = 3
-    return f"+{value:.{decimals}f}/hr"
+    sign = "+" if value > 0 else ""
+    return f"{sign}{value:.{decimals}f}/hr"
 
 
 def number(value: Any) -> Optional[float]:
@@ -1899,6 +1900,11 @@ class UsageApp:
         self.stats_rate_top = 343
         self.stats_rate_bottom = 508
         self.stats_rate_scale = 1.0
+        self.stats_rate_scales: dict[str, float] = {"five_hour": 1.0, "weekly": 1.0}
+        self.stats_rate_lanes: dict[str, tuple[float, float]] = {
+            "five_hour": (343.0, 421.0),
+            "weekly": (429.0, 508.0),
+        }
         self.stats_daily_rate_scales: dict[str, float] = {"five_hour": 1.0, "weekly": 1.0}
         self.stats_daily_rate_lanes: dict[str, tuple[float, float]] = {
             "five_hour": (343.0, 421.0),
@@ -2594,9 +2600,15 @@ class UsageApp:
         if not self.stats_plot_points or self.stats_plot_end <= self.stats_plot_start:
             return
         x = clamp(float(event.x), self.stats_plot_left, self.stats_plot_right)
-        fraction = (x - self.stats_plot_left) / (self.stats_plot_right - self.stats_plot_left)
-        target = self.stats_plot_start + fraction * (self.stats_plot_end - self.stats_plot_start)
-        selected = min(self.stats_plot_points, key=lambda point: abs(point["timestamp"] - target))
+        positioned_points = [
+            point for point in self.stats_plot_points if number(point.get("_plot_x")) is not None
+        ]
+        if positioned_points:
+            selected = min(positioned_points, key=lambda point: abs(float(point["_plot_x"]) - x))
+        else:
+            fraction = (x - self.stats_plot_left) / (self.stats_plot_right - self.stats_plot_left)
+            target = self.stats_plot_start + fraction * (self.stats_plot_end - self.stats_plot_start)
+            selected = min(self.stats_plot_points, key=lambda point: abs(point["timestamp"] - target))
         self.stats_selected_timestamp = selected["timestamp"]
         self._draw_statistics_selection()
 
@@ -2750,7 +2762,7 @@ class UsageApp:
                     self.stats_readout.configure(
                         text=(
                             f"HOURLY · LAST {format_statistics_span(self.stats_period_hours)}  ·  "
-                            f"live context: {context}  ·  mouse wheel zooms · click or drag inspects a point"
+                            f"live context: {context}  ·  inactive time removed · mouse wheel zooms · click or drag inspects a point"
                         )
                     )
             return
@@ -2758,8 +2770,12 @@ class UsageApp:
             self.stats_plot_points,
             key=lambda point: abs(point["timestamp"] - self.stats_selected_timestamp),
         )
-        fraction = (selected["timestamp"] - self.stats_plot_start) / max(1, self.stats_plot_end - self.stats_plot_start)
-        x = self.stats_plot_left + clamp(fraction, 0, 1) * (self.stats_plot_right - self.stats_plot_left)
+        plotted_x = number(selected.get("_plot_x"))
+        if plotted_x is not None and not (self.stats_daily_view or self.stats_weekly_view):
+            x = clamp(plotted_x, self.stats_plot_left, self.stats_plot_right)
+        else:
+            fraction = (selected["timestamp"] - self.stats_plot_start) / max(1, self.stats_plot_end - self.stats_plot_start)
+            x = self.stats_plot_left + clamp(fraction, 0, 1) * (self.stats_plot_right - self.stats_plot_left)
         if not (self.stats_daily_view or self.stats_weekly_view):
             canvas.create_line(
                 x,
@@ -2873,8 +2889,15 @@ class UsageApp:
                 tags="stats-selection",
             )
         if rate is not None:
-            plotted_rate = clamp(rate, 0, self.stats_rate_scale)
-            rate_y = self.stats_rate_top + ((self.stats_rate_scale - plotted_rate) / self.stats_rate_scale) * (self.stats_rate_bottom - self.stats_rate_top)
+            weekly_rate_scale = self.stats_rate_scales.get("weekly", self.stats_rate_scale)
+            weekly_rate_top, weekly_rate_bottom = self.stats_rate_lanes.get(
+                "weekly",
+                (self.stats_rate_top, self.stats_rate_bottom),
+            )
+            plotted_rate = clamp(rate, 0, weekly_rate_scale)
+            rate_y = weekly_rate_top + (
+                (weekly_rate_scale - plotted_rate) / weekly_rate_scale
+            ) * (weekly_rate_bottom - weekly_rate_top)
             canvas.create_oval(
                 x - 5,
                 rate_y - 5,
@@ -2900,8 +2923,15 @@ class UsageApp:
                 tags="stats-selection",
             )
         if five_hour_rate is not None:
-            plotted_five_hour_rate = clamp(five_hour_rate, 0, self.stats_rate_scale)
-            five_hour_rate_y = self.stats_rate_top + ((self.stats_rate_scale - plotted_five_hour_rate) / self.stats_rate_scale) * (self.stats_rate_bottom - self.stats_rate_top)
+            five_hour_rate_scale = self.stats_rate_scales.get("five_hour", self.stats_rate_scale)
+            five_hour_rate_top, five_hour_rate_bottom = self.stats_rate_lanes.get(
+                "five_hour",
+                (self.stats_rate_top, self.stats_rate_bottom),
+            )
+            plotted_five_hour_rate = clamp(five_hour_rate, 0, five_hour_rate_scale)
+            five_hour_rate_y = five_hour_rate_top + (
+                (five_hour_rate_scale - plotted_five_hour_rate) / five_hour_rate_scale
+            ) * (five_hour_rate_bottom - five_hour_rate_top)
             canvas.create_oval(
                 x - 5,
                 five_hour_rate_y - 5,
@@ -3086,7 +3116,7 @@ class UsageApp:
 
         panes = (
             ("usage", usage_label, COLORS["soft"]),
-            ("rate", "PACE · POINTS / HOUR", COLORS["soft"]),
+            ("rate", "PACE · 5-HOUR AND WEEKLY — SEPARATE Y-AXES", COLORS["soft"]),
             ("token", token_label, COLORS["mint"]),
         )
         for key, label, color in panes:
@@ -3110,7 +3140,7 @@ class UsageApp:
                 fill=color,
                 font=("Segoe UI", 8, "bold"),
             )
-            if key in ("usage", "rate"):
+            if key == "usage":
                 canvas.create_text(
                     right - 76,
                     pane_top + 10,
@@ -3222,12 +3252,17 @@ class UsageApp:
         right: float,
         top: float,
         bottom: float,
+        x_mapper: Optional[Any] = None,
     ) -> None:
         """Annotate model/effort changes behind the metrics they help explain."""
 
         span = max(1.0, end_time - start_time)
         for timestamp, change_type, _value in self._context_changes(points):
-            x = left + clamp((timestamp - start_time) / span, 0, 1) * (right - left)
+            x = (
+                float(x_mapper(timestamp))
+                if x_mapper is not None
+                else left + clamp((timestamp - start_time) / span, 0, 1) * (right - left)
+            )
             if change_type == "model":
                 color, width, dash, offset, stipple = COLORS["amber"], 1, (), -0.5, "gray50"
             else:
@@ -3315,6 +3350,68 @@ class UsageApp:
                 text="0/hr",
                 anchor="se",
                 fill=COLORS["muted"],
+                font=("Segoe UI", 7),
+            )
+        return lanes
+
+    def _draw_statistics_hourly_rate_lanes(
+        self,
+        canvas: tk.Canvas,
+        left: float,
+        right: float,
+        top: float,
+        bottom: float,
+        scales: dict[str, float],
+    ) -> dict[str, tuple[float, float]]:
+        """Keep 5-hour and weekly pace in separate panes with separate Y-axes."""
+
+        lanes = self._statistics_usage_lanes(top, bottom)
+        self.stats_rate_lanes = lanes
+        self.stats_rate_scales = {
+            key: max(0.0001, float(scales.get(key, 1.0)))
+            for key in ("five_hour", "weekly")
+        }
+        for key, label, color in (
+            ("five_hour", "5H", COLORS["cyan"]),
+            ("weekly", "WEEK", COLORS["violet"]),
+        ):
+            lane_top, lane_bottom = lanes[key]
+            scale = self.stats_rate_scales[key]
+            canvas.create_rectangle(
+                left,
+                lane_top,
+                right,
+                lane_bottom,
+                fill=COLORS["panel_raised"],
+                outline=COLORS["line"],
+                width=1,
+                tags=("stats-hourly-rate-lane", f"stats-{key}-hourly-rate-lane"),
+            )
+            canvas.create_text(
+                left - 10,
+                (lane_top + lane_bottom) / 2,
+                text=label,
+                anchor="e",
+                fill=color,
+                font=("Segoe UI", 8, "bold"),
+            )
+            midpoint_y = lane_bottom - 0.5 * (lane_bottom - lane_top)
+            canvas.create_line(left, midpoint_y, right, midpoint_y, fill=COLORS["line"], dash=(3, 5))
+            canvas.create_line(left, lane_bottom, right, lane_bottom, fill=COLORS["soft"], width=1)
+            canvas.create_text(
+                right - 6,
+                lane_top + 2,
+                text=format_rate_axis(scale, scale),
+                anchor="ne",
+                fill=color,
+                font=("Segoe UI", 7),
+            )
+            canvas.create_text(
+                right - 6,
+                lane_bottom - 2,
+                text="0/hr",
+                anchor="se",
+                fill=color,
                 font=("Segoe UI", 7),
             )
         return lanes
@@ -3829,15 +3926,68 @@ class UsageApp:
             )
         self.stats_plot_points = [plot_by_timestamp[key] for key in sorted(plot_by_timestamp)]
 
-        def x_for(epoch: float) -> float:
-            return left + clamp((epoch - start_time) / span, 0, 1) * (right - left)
-
         gap_threshold_seconds = ACTIVE_SIGNAL_MAX_AGE_SECONDS
+        usage_timestamps = [float(point["timestamp"]) for point in usage_points]
         recording_break_starts = [
-            current["timestamp"]
-            for previous, current in zip(usage_points, usage_points[1:])
-            if current["timestamp"] - previous["timestamp"] > gap_threshold_seconds
+            current_timestamp
+            for previous_timestamp, current_timestamp in zip(usage_timestamps, usage_timestamps[1:])
+            if current_timestamp - previous_timestamp > gap_threshold_seconds
         ]
+        active_deltas = sorted(
+            current_timestamp - previous_timestamp
+            for previous_timestamp, current_timestamp in zip(usage_timestamps, usage_timestamps[1:])
+            if 0 < current_timestamp - previous_timestamp <= gap_threshold_seconds
+        )
+        typical_active_delta = active_deltas[len(active_deltas) // 2] if active_deltas else 60.0
+        compressed_gap_delta = max(0.001, min(1.0, typical_active_delta * 0.01))
+        active_positions = [0.0]
+        for previous_timestamp, current_timestamp in zip(usage_timestamps, usage_timestamps[1:]):
+            real_delta = max(0.001, current_timestamp - previous_timestamp)
+            active_positions.append(
+                active_positions[-1]
+                + (compressed_gap_delta if real_delta > gap_threshold_seconds else real_delta)
+            )
+        active_span = active_positions[-1] if len(active_positions) >= 2 else 0.0
+
+        def active_position_for(epoch: float) -> float:
+            if not usage_timestamps:
+                return clamp((epoch - start_time) / span, 0, 1) * max(1.0, span)
+            if len(usage_timestamps) == 1 or active_span <= 0:
+                return active_span
+            index = bisect_right(usage_timestamps, epoch) - 1
+            if index < 0:
+                return active_positions[0]
+            if index >= len(usage_timestamps) - 1:
+                return active_positions[-1]
+            real_delta = max(0.001, usage_timestamps[index + 1] - usage_timestamps[index])
+            fraction = clamp((epoch - usage_timestamps[index]) / real_delta, 0, 1)
+            return active_positions[index] + fraction * (active_positions[index + 1] - active_positions[index])
+
+        def x_for(epoch: float) -> float:
+            if not usage_timestamps:
+                return left + clamp((epoch - start_time) / span, 0, 1) * (right - left)
+            if len(usage_timestamps) == 1 or active_span <= 0:
+                return right
+            return left + clamp(active_position_for(epoch) / active_span, 0, 1) * (right - left)
+
+        def epoch_for_x(plot_x: float) -> float:
+            if not usage_timestamps:
+                fraction = clamp((plot_x - left) / max(1.0, right - left), 0, 1)
+                return start_time + fraction * span
+            if len(usage_timestamps) == 1 or active_span <= 0:
+                return usage_timestamps[0]
+            target_position = clamp((plot_x - left) / max(1.0, right - left), 0, 1) * active_span
+            index = bisect_right(active_positions, target_position) - 1
+            if index < 0:
+                return usage_timestamps[0]
+            if index >= len(active_positions) - 1:
+                return usage_timestamps[-1]
+            display_delta = max(0.001, active_positions[index + 1] - active_positions[index])
+            fraction = clamp((target_position - active_positions[index]) / display_delta, 0, 1)
+            return usage_timestamps[index] + fraction * (usage_timestamps[index + 1] - usage_timestamps[index])
+
+        for plot_point in self.stats_plot_points:
+            plot_point["_plot_x"] = x_for(plot_point["timestamp"])
 
         def crosses_recording_break(previous_timestamp: float, current_timestamp: float) -> bool:
             break_index = bisect_right(recording_break_starts, previous_timestamp)
@@ -3853,7 +4003,8 @@ class UsageApp:
             previous_point: Optional[dict[str, Any]] = None
             for point in points:
                 if previous_point is not None and (
-                    crosses_recording_break(previous_point["timestamp"], point["timestamp"])
+                    point["timestamp"] - previous_point["timestamp"] > gap_threshold_seconds
+                    or crosses_recording_break(previous_point["timestamp"], point["timestamp"])
                     or point.get("segment") != previous_point.get("segment")
                 ):
                     if len(coordinates) >= 4:
@@ -3867,7 +4018,7 @@ class UsageApp:
         canvas.create_text(
             18,
             card_layout["history_title_y"],
-            text="LIVE HISTORY",
+            text="ACTIVE-TIME HISTORY",
             anchor="w",
             fill=COLORS["soft"],
             font=("Segoe UI", 8, "bold"),
@@ -3875,7 +4026,7 @@ class UsageApp:
         canvas.create_text(
             canvas_width - 18,
             card_layout["history_title_y"],
-            text="select a point to update every card",
+            text="inactive time removed · select a point to update every card",
             anchor="e",
             fill=COLORS["muted"],
             font=("Segoe UI", 8),
@@ -3884,7 +4035,7 @@ class UsageApp:
         canvas.create_text(
             18,
             card_layout["history_subtitle_y"],
-            text=f"LAST {scope_label}",
+            text=f"LAST {scope_label} · sessions packed together",
             anchor="w",
             fill=COLORS["muted"],
             font=("Segoe UI", 8),
@@ -3919,6 +4070,32 @@ class UsageApp:
             "USAGE HISTORY · 0–100%",
             "TOKEN ACTIVITY",
         )
+        last_break_x = -math.inf
+        for break_timestamp in recording_break_starts:
+            break_x = x_for(break_timestamp)
+            if break_x - last_break_x < 8:
+                continue
+            canvas.create_line(
+                break_x - 4,
+                token_bottom + 12,
+                break_x - 1,
+                token_bottom + 6,
+                fill=COLORS["muted"],
+                width=1,
+                stipple="gray50",
+                tags="stats-session-break",
+            )
+            canvas.create_line(
+                break_x,
+                token_bottom + 12,
+                break_x + 3,
+                token_bottom + 6,
+                fill=COLORS["muted"],
+                width=1,
+                stipple="gray50",
+                tags="stats-session-break",
+            )
+            last_break_x = break_x
         self._draw_statistics_context_markers(
             canvas,
             usage_points,
@@ -3928,7 +4105,9 @@ class UsageApp:
             right,
             geometry["usage_pane_top"],
             geometry["token_pane_bottom"],
+            x_for,
         )
+        self.stats_usage_scale = 100.0
         usage_lanes = self._draw_statistics_usage_lanes(
             canvas,
             left,
@@ -3994,37 +4173,56 @@ class UsageApp:
         if not usage_points and not five_hour_points:
             canvas.create_text((left + right) / 2, (usage_top + usage_bottom) / 2, text="Keep the counter running to build this graph.", fill=COLORS["muted"], font=("Segoe UI", 10))
 
-        rate_values = sorted(
-            abs(point["rate_per_hour"])
-            for point in [*rate_points, *five_hour_rate_points]
-            if math.isfinite(point["rate_per_hour"])
+        hourly_rate_values = {
+            "five_hour": [
+                abs(point["rate_per_hour"])
+                for point in five_hour_rate_points
+                if math.isfinite(point["rate_per_hour"])
+            ],
+            "weekly": [
+                abs(point["rate_per_hour"])
+                for point in rate_points
+                if math.isfinite(point["rate_per_hour"])
+            ],
+        }
+        rate_scales = {
+            "five_hour": max(
+                1.0,
+                nice_positive_scale(max(hourly_rate_values["five_hour"], default=0.0)),
+            ),
+            "weekly": 100.0,
+        }
+        self.stats_rate_scale = max(rate_scales.values(), default=1.0)
+        hourly_rate_lanes = self._draw_statistics_hourly_rate_lanes(
+            canvas,
+            left,
+            right,
+            rate_top,
+            rate_bottom,
+            rate_scales,
         )
-        if rate_values:
-            observed_max = max(rate_values)
-            rate_scale = max(20.0, math.ceil(observed_max / 20.0) * 20.0)
-        else:
-            rate_scale = 20.0
-        self.stats_rate_scale = rate_scale
-        for value in (rate_scale, rate_scale / 2, 0):
-            y = rate_top + ((rate_scale - value) / rate_scale) * (rate_bottom - rate_top)
-            canvas.create_line(left, y, right, y, fill=COLORS["soft"] if value == 0 else COLORS["line"], width=2 if value == 0 else 1)
-            sign = "+" if value > 0 else ""
-            decimals = 0 if rate_scale >= 100 else 1
-            canvas.create_text(canvas_width - 10, y, text=f"{sign}{value:.{decimals}f}", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         if rate_points:
+            weekly_rate_top, weekly_rate_bottom = hourly_rate_lanes["weekly"]
             draw_recorded_segments(
                 rate_points,
-                lambda point: rate_top
-                + ((rate_scale - clamp(point["rate_per_hour"], 0, rate_scale)) / rate_scale)
-                * (rate_bottom - rate_top),
+                lambda point: weekly_rate_top
+                + (
+                    (rate_scales["weekly"] - clamp(point["rate_per_hour"], 0, rate_scales["weekly"]))
+                    / rate_scales["weekly"]
+                )
+                * (weekly_rate_bottom - weekly_rate_top),
                 COLORS["violet"],
             )
         if five_hour_rate_points:
+            five_hour_rate_top, five_hour_rate_bottom = hourly_rate_lanes["five_hour"]
             draw_recorded_segments(
                 five_hour_rate_points,
-                lambda point: rate_top
-                + ((rate_scale - clamp(point["rate_per_hour"], 0, rate_scale)) / rate_scale)
-                * (rate_bottom - rate_top),
+                lambda point: five_hour_rate_top
+                + (
+                    (rate_scales["five_hour"] - clamp(point["rate_per_hour"], 0, rate_scales["five_hour"]))
+                    / rate_scales["five_hour"]
+                )
+                * (five_hour_rate_bottom - five_hour_rate_top),
                 COLORS["cyan"],
             )
         if not rate_points and not five_hour_rate_points:
@@ -4053,7 +4251,7 @@ class UsageApp:
 
         for fraction in (0, 0.5, 1):
             x = left + fraction * (right - left)
-            canvas.create_text(x, token_bottom + 18, text=axis_label(start_time + fraction * span), fill=COLORS["muted"], font=("Segoe UI", 8))
+            canvas.create_text(x, token_bottom + 18, text=axis_label(epoch_for_x(x)), fill=COLORS["muted"], font=("Segoe UI", 8))
         self._draw_statistics_selection()
 
     def open_settings(self) -> None:
