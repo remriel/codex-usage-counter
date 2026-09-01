@@ -3832,14 +3832,37 @@ class UsageApp:
         def x_for(epoch: float) -> float:
             return left + clamp((epoch - start_time) / span, 0, 1) * (right - left)
 
-        def draw_continuous_recorded_path(points: list[dict[str, Any]], y_for: Any, color: str) -> None:
-            """Connect recorded active points without inventing intermediate selectable samples."""
+        gap_threshold_seconds = ACTIVE_SIGNAL_MAX_AGE_SECONDS
+        recording_break_starts = [
+            current["timestamp"]
+            for previous, current in zip(usage_points, usage_points[1:])
+            if current["timestamp"] - previous["timestamp"] > gap_threshold_seconds
+        ]
+
+        def crosses_recording_break(previous_timestamp: float, current_timestamp: float) -> bool:
+            break_index = bisect_right(recording_break_starts, previous_timestamp)
+            return (
+                break_index < len(recording_break_starts)
+                and recording_break_starts[break_index] <= current_timestamp
+            )
+
+        def draw_recorded_segments(points: list[dict[str, Any]], y_for: Any, color: str) -> None:
+            """Draw only within recorded sessions; inactivity remains visibly blank."""
 
             coordinates: list[float] = []
+            previous_point: Optional[dict[str, Any]] = None
             for point in points:
+                if previous_point is not None and (
+                    crosses_recording_break(previous_point["timestamp"], point["timestamp"])
+                    or point.get("segment") != previous_point.get("segment")
+                ):
+                    if len(coordinates) >= 4:
+                        canvas.create_line(*coordinates, fill=color, width=3, tags="stats-rate-path")
+                    coordinates = []
                 coordinates.extend((x_for(point["timestamp"]), y_for(point)))
+                previous_point = point
             if len(coordinates) >= 4:
-                canvas.create_line(*coordinates, fill=color, width=3)
+                canvas.create_line(*coordinates, fill=color, width=3, tags="stats-rate-path")
 
         canvas.create_text(
             18,
@@ -3989,7 +4012,7 @@ class UsageApp:
             decimals = 0 if rate_scale >= 100 else 1
             canvas.create_text(canvas_width - 10, y, text=f"{sign}{value:.{decimals}f}", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         if rate_points:
-            draw_continuous_recorded_path(
+            draw_recorded_segments(
                 rate_points,
                 lambda point: rate_top
                 + ((rate_scale - clamp(point["rate_per_hour"], 0, rate_scale)) / rate_scale)
@@ -3997,7 +4020,7 @@ class UsageApp:
                 COLORS["violet"],
             )
         if five_hour_rate_points:
-            draw_continuous_recorded_path(
+            draw_recorded_segments(
                 five_hour_rate_points,
                 lambda point: rate_top
                 + ((rate_scale - clamp(point["rate_per_hour"], 0, rate_scale)) / rate_scale)

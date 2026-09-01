@@ -51,7 +51,7 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - On wide displays, prioritize the charts with a 6×2 card grid; preserve the 4×3 layout below 1,100 canvas pixels so card labels and selected values remain readable.
 - Treat model and effort as timestamped explanatory context—not usage metrics—so their markers never affect allowance, rate, token, or ETA calculations. Do not backfill markers into historical samples that predate metadata collection.
 - Use one targeted full metadata scan for an active session only if the fast file-tail reader has no model/effort context; cache the result and keep normal append updates lightweight.
-- Keep real wall-clock positions and recorded samples, but connect consecutive recorded pace points across inactive intervals so the Hourly paths remain visually continuous. Do not create synthetic history points or selectable values inside those intervals.
+- Keep real wall-clock positions and recorded samples. Treat an Hourly chart session as an active cluster separated by more than the 10-minute local-signal freshness limit; break pace paths across those inactive intervals and rate-reset segments. Do not use raw session-file IDs as visual boundaries because multiple local files can alternate while Codex is continuously active.
 
 ## Relevant files
 
@@ -111,8 +111,11 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - The focused-view/context-marker production build was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`; its SHA-256 matches the current build (`FE75BABB662619E40D8417450ACF061F720E673542A07C9BF88F29E9CF1459D6`) and the normal two-process packaged app launched successfully.
 - Tight-zoom QA passed through `1 hour → 30 → 15 → 10 → 5 → 3 → 2 → 1 minute`; labels display minute units correctly, and the rate/token calculations retain their preceding 45-minute context when the visible window is smaller.
 - Native Tk accepted the one-pixel `gray50` stipple treatment for both context-marker lines and their smaller top indicators. Model remains amber and effort remains dashed coral.
-- A full synthetic Statistics render with two active clusters separated by a large wall-clock interval produced exactly one cyan and one violet pace path spanning both clusters. The path crosses the inactive interval visually while the plot and selection data still contain only real recorded points.
+- A previous continuous-path attempt deliberately joined active clusters across idle time. Screenshot review showed that this produced misleading straight slopes between sessions, so that approach was rejected and replaced with session-aware gaps.
 - The tighter-zoom/subtle-marker/continuous-path production build was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`; its SHA-256 matches the build (`DBF1139D0FD05CCEBCA26AC125E0E597321E3839CFB72EB6391C2F832717B894`) and the normal two-process packaged app launched successfully.
+- A recorded-history audit found 129 raw session-file ID changes among 153 points in one hour, confirming that file IDs are not reliable activity-session boundaries. The renderer instead uses the existing 10-minute signal freshness limit plus rate-reset segments.
+- Screenshot-case Canvas QA passed with three active clusters per allowance series: three cyan and three violet pace paths, blank idle intervals, no path crossing an inactivity boundary, no synthetic samples, and no unnecessary break at a rapid local-file handoff.
+- The screenshot-corrected session-gap production build was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`; its SHA-256 matches the build (`EFF21E6821F976535F7F1C3789BDEDC60F6DFD5E8148B8D2A1CA926C20FE0FE3`) and the normal two-process packaged app launched successfully.
 
 ## Next steps
 
