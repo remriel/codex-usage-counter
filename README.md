@@ -18,7 +18,7 @@ A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, rese
 - Keeps minute-level usage history in the zoomable **Hourly** view, plus stock-chart-style **Daily** and **Weekly** intervals with reset-aware 5-hour/weekly totals, pace, and token activity.
 - Opens Statistics as a fullscreen view with a responsive, edge-to-edge chart canvas.
 - Keeps matching 5-hour and weekly cards side by side and updates those cards when an Hourly, Daily, or Weekly point is clicked, dragged across, or selected with the mouse wheel.
-- Provides continuous 5-hour and weekly usage bars in separate lanes, continuous rate paths between recorded active periods, token activity, observed tokens per allowance point, ETA, reset-aware regression, and time-series statistics.
+- Provides continuous 5-hour and weekly usage bars in separate lanes, session-aware rate paths with blank inactive intervals, token activity, observed tokens per allowance point, ETA, reset-aware regression, and time-series statistics.
 
 ## Quick start on Windows
 
