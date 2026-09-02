@@ -3550,6 +3550,10 @@ class UsageApp:
             daily_rate_scales,
         )
 
+        daily_usage_line_points: dict[str, list[tuple[float, float, float]]] = {
+            "five_hour": [],
+            "weekly": [],
+        }
         for point in daily_points:
             bucket_start = number(point.get(bucket_key))
             if bucket_start is None:
@@ -3558,12 +3562,13 @@ class UsageApp:
             next_bucket_start = (bucket_local + timedelta(days=interval_days)).timestamp()
             bar_left = x_for(bucket_start)
             bar_right = x_for(next_bucket_start)
-            weekly_total = number(point.get("used_percent")) or 0.0
-            five_hour_total = number(point.get("five_hour_used_percent")) or 0.0
-            for lane_key, total, color, tag in (
+            weekly_total = number(point.get("used_percent"))
+            five_hour_total = number(point.get("five_hour_used_percent"))
+            for lane_key, raw_total, color, tag in (
                 ("five_hour", five_hour_total, COLORS["cyan"], "stats-five-hour-usage-bar"),
                 ("weekly", weekly_total, COLORS["violet"], "stats-weekly-usage-bar"),
             ):
+                total = raw_total or 0.0
                 lane_top, lane_bottom = usage_lanes[lane_key]
                 y = lane_bottom - (clamp(total, 0, usage_scale) / usage_scale) * (lane_bottom - lane_top)
                 canvas.create_rectangle(
@@ -3575,12 +3580,57 @@ class UsageApp:
                     outline="",
                     tags=("stats-usage-bar", tag),
                 )
+                if raw_total is not None:
+                    daily_usage_line_points[lane_key].append(
+                        (bucket_start, (bar_left + bar_right) / 2, y)
+                    )
 
-        def draw_daily_rate_bars(field: str, color: str, lane_key: str) -> None:
-            """Use one full-width bar per recorded day; Daily has no connected trend lines."""
+        def draw_daily_bar_trend(
+            points: list[tuple[float, float, float]],
+            color: str,
+            tag: str,
+        ) -> None:
+            """Trace adjacent Daily bar tops without bridging missing calendar days."""
+
+            if is_weekly:
+                return
+            coordinates: list[float] = []
+            previous_start: Optional[float] = None
+            for bucket_start, x, y in points:
+                if previous_start is not None:
+                    previous_date = datetime.fromtimestamp(previous_start).astimezone().date()
+                    current_date = datetime.fromtimestamp(bucket_start).astimezone().date()
+                    if (current_date - previous_date).days != 1:
+                        if len(coordinates) >= 4:
+                            canvas.create_line(*coordinates, fill=COLORS["ink"], width=5, tags=("stats-daily-trend-underlay", tag))
+                            canvas.create_line(*coordinates, fill=color, width=2, tags=("stats-daily-trend", tag))
+                        coordinates = []
+                coordinates.extend((x, y))
+                previous_start = bucket_start
+            if len(coordinates) >= 4:
+                canvas.create_line(*coordinates, fill=COLORS["ink"], width=5, tags=("stats-daily-trend-underlay", tag))
+                canvas.create_line(*coordinates, fill=color, width=2, tags=("stats-daily-trend", tag))
+            for _bucket_start, x, y in points:
+                canvas.create_oval(
+                    x - 4,
+                    y - 4,
+                    x + 4,
+                    y + 4,
+                    fill=color,
+                    outline=COLORS["text"],
+                    width=1,
+                    tags=("stats-daily-trend-point", tag),
+                )
+
+        draw_daily_bar_trend(daily_usage_line_points["five_hour"], COLORS["cyan"], "stats-five-hour-usage-trend")
+        draw_daily_bar_trend(daily_usage_line_points["weekly"], COLORS["violet"], "stats-weekly-usage-trend")
+
+        def draw_daily_rate_bars(field: str, color: str, lane_key: str) -> list[tuple[float, float, float]]:
+            """Draw one full-width bar per recorded interval and return its top-center points."""
 
             lane_top, lane_bottom = daily_rate_lanes[lane_key]
             rate_scale = daily_rate_scales[lane_key]
+            trend_points: list[tuple[float, float, float]] = []
             for point in daily_points:
                 value = number(point.get(field))
                 bucket_start = number(point.get(bucket_key))
@@ -3600,9 +3650,13 @@ class UsageApp:
                     outline="",
                     tags=("stats-daily-rate-bar", f"stats-{lane_key}-daily-rate-bar"),
                 )
+                trend_points.append((bucket_start, (bar_left + bar_right) / 2, y))
+            return trend_points
 
-        draw_daily_rate_bars("five_hour_rate_per_hour", COLORS["cyan"], "five_hour")
-        draw_daily_rate_bars("rate_per_hour", COLORS["violet"], "weekly")
+        five_hour_rate_trend = draw_daily_rate_bars("five_hour_rate_per_hour", COLORS["cyan"], "five_hour")
+        weekly_rate_trend = draw_daily_rate_bars("rate_per_hour", COLORS["violet"], "weekly")
+        draw_daily_bar_trend(five_hour_rate_trend, COLORS["cyan"], "stats-five-hour-rate-trend")
+        draw_daily_bar_trend(weekly_rate_trend, COLORS["violet"], "stats-weekly-rate-trend")
         if not daily_points:
             canvas.create_text(
                 (left + right) / 2,
