@@ -589,6 +589,15 @@ class UsageHistory:
 
         return self._sanitize(self.since(hours))
 
+    def points_between(self, start_time: float, end_time: float) -> list[dict[str, Any]]:
+        """Return retained minute-level samples inside an explicit historical viewport."""
+
+        return self._sanitize(
+            item
+            for item in self.points
+            if start_time <= item["timestamp"] <= end_time
+        )
+
     def daily_statistics(self, days: int = HISTORY_RETENTION_DAYS) -> list[dict[str, Any]]:
         """Aggregate retained samples into stock-chart-style local calendar days."""
 
@@ -1903,6 +1912,7 @@ class UsageApp:
         self.stats_usage_points: list[dict[str, Any]] = []
         self.stats_rate_context_points: list[dict[str, Any]] = []
         self.stats_period_hours = 1.0
+        self.stats_view_end: Optional[float] = None
         self.stats_daily_view = False
         self.stats_weekly_view = False
         self.stats_plot_points: list[dict[str, Any]] = []
@@ -2432,6 +2442,7 @@ class UsageApp:
                 pass
 
         self.stats_period_hours = 1.0
+        self.stats_view_end = None
         self.stats_daily_view = False
         self.stats_weekly_view = False
         dialog = tk.Toplevel(self.root)
@@ -2553,8 +2564,9 @@ class UsageApp:
         self.stats_canvas_size = size
         self._render_statistics()
 
-    def set_stats_period(self, hours: float) -> None:
+    def set_stats_period(self, hours: float, view_end: Optional[float] = None) -> None:
         self.stats_period_hours = max(STATS_MIN_HOURLY_ZOOM_MINUTES / 60, float(hours))
+        self.stats_view_end = view_end
         self.stats_daily_view = False
         self.stats_weekly_view = False
         self.stats_selected_timestamp = None
@@ -2565,6 +2577,7 @@ class UsageApp:
 
     def set_stats_daily(self) -> None:
         self.stats_period_hours = float(HISTORY_RETENTION_DAYS * 24)
+        self.stats_view_end = None
         self.stats_daily_view = True
         self.stats_weekly_view = False
         self.stats_selected_timestamp = None
@@ -2572,6 +2585,7 @@ class UsageApp:
 
     def set_stats_weekly(self) -> None:
         self.stats_period_hours = float(HISTORY_RETENTION_DAYS * 24)
+        self.stats_view_end = None
         self.stats_daily_view = False
         self.stats_weekly_view = True
         self.stats_selected_timestamp = None
@@ -2596,8 +2610,39 @@ class UsageApp:
             result.append(maximum_minutes)
         return result
 
-    def zoom_statistics(self, direction: int) -> None:
-        """Zoom the detailed Hourly chart through every span in recorded history."""
+    def _statistics_timestamp_at_x(self, x: float) -> float:
+        """Interpolate the recorded timestamp under a chart-space x coordinate."""
+
+        positioned = sorted(
+            (
+                (float(point["_plot_x"]), float(point["timestamp"]))
+                for point in self.stats_plot_points
+                if number(point.get("_plot_x")) is not None
+            ),
+            key=lambda item: item[0],
+        )
+        if not positioned:
+            fraction = clamp(
+                (x - self.stats_plot_left) / max(1, self.stats_plot_right - self.stats_plot_left),
+                0,
+                1,
+            )
+            return self.stats_plot_start + fraction * (self.stats_plot_end - self.stats_plot_start)
+        if x <= positioned[0][0]:
+            return positioned[0][1]
+        if x >= positioned[-1][0]:
+            return positioned[-1][1]
+        for index in range(1, len(positioned)):
+            right_x, right_time = positioned[index]
+            if x > right_x:
+                continue
+            left_x, left_time = positioned[index - 1]
+            fraction = clamp((x - left_x) / max(0.001, right_x - left_x), 0, 1)
+            return left_time + fraction * (right_time - left_time)
+        return positioned[-1][1]
+
+    def zoom_statistics(self, direction: int, anchor_x: Optional[float] = None) -> None:
+        """Zoom Hourly around any cursor-selected period in retained history."""
 
         if self.stats_daily_view or self.stats_weekly_view:
             return
@@ -2609,10 +2654,31 @@ class UsageApp:
             target_minutes = steps[max(0, bisect_left(steps, current_minutes) - 1)]
         target = target_minutes / 60
         if not math.isclose(target, self.stats_period_hours, abs_tol=1 / 120):
-            self.set_stats_period(target)
+            x = clamp(
+                float(anchor_x) if anchor_x is not None else (self.stats_plot_left + self.stats_plot_right) / 2,
+                self.stats_plot_left,
+                self.stats_plot_right,
+            )
+            anchor_time = self._statistics_timestamp_at_x(x)
+            anchor_fraction = clamp(
+                (x - self.stats_plot_left) / max(1, self.stats_plot_right - self.stats_plot_left),
+                0,
+                1,
+            )
+            target_seconds = target * 3600
+            oldest = min((point["timestamp"] for point in self.history.points), default=time.time())
+            newest = max(time.time(), max((point["timestamp"] for point in self.history.points), default=0.0))
+            view_end = anchor_time + (1 - anchor_fraction) * target_seconds
+            view_end = clamp(view_end, min(oldest + target_seconds, newest), newest)
+            if newest - view_end < 1:
+                view_end = None
+            self.set_stats_period(target, view_end=view_end)
 
     def _zoom_statistics_with_wheel(self, event: Any) -> str:
-        self.zoom_statistics(1 if getattr(event, "delta", 0) < 0 else -1)
+        self.zoom_statistics(
+            1 if getattr(event, "delta", 0) < 0 else -1,
+            anchor_x=float(getattr(event, "x", (self.stats_plot_left + self.stats_plot_right) / 2)),
+        )
         return "break"
 
     def close_statistics(self) -> None:
@@ -2633,6 +2699,7 @@ class UsageApp:
         self.stats_rate_context_points = []
         self.stats_plot_points = []
         self.stats_selected_timestamp = None
+        self.stats_view_end = None
 
     def _set_statistics_context(self, model: Any, effort: Any) -> None:
         if self.stats_context_label is None:
@@ -2800,7 +2867,10 @@ class UsageApp:
         canvas.delete("stats-selection")
         if self.stats_selected_timestamp is None or not self.stats_plot_points:
             self._update_statistics_cards(None)
-            self._set_statistics_context(self.snapshot.model, self.snapshot.reasoning_effort)
+            self._set_statistics_context(
+                self.stats_live_card_data.get("model"),
+                self.stats_live_card_data.get("reasoning_effort"),
+            )
             if self.stats_readout is not None:
                 if self.stats_daily_view or self.stats_weekly_view:
                     interval = "WEEK" if self.stats_weekly_view else "DAY"
@@ -2808,10 +2878,15 @@ class UsageApp:
                         text=f"LATEST RECORDED {interval}  ·  click, drag, or scroll through bars"
                     )
                 else:
+                    position = (
+                        "LATEST"
+                        if self.stats_view_end is None
+                        else f"ENDING {datetime.fromtimestamp(self.stats_plot_end).astimezone().strftime('%b %d · %I:%M %p').replace(' 0', ' ')}"
+                    )
                     self.stats_readout.configure(
                         text=(
-                            f"HOURLY · LAST {format_statistics_span(self.stats_period_hours)}  ·  "
-                            "inactive time removed · mouse wheel zooms · click or drag inspects a point"
+                            f"HOURLY · {format_statistics_span(self.stats_period_hours)} · {position}  ·  "
+                            "point and wheel to zoom anywhere · click or drag inspects a point"
                         )
                     )
             return
@@ -3777,11 +3852,13 @@ class UsageApp:
         canvas_width = max(640, int(canvas.winfo_width()))
         canvas_height = max(560, int(canvas.winfo_height()))
 
-        end_time = time.time()
+        now = time.time()
+        end_time = min(self.stats_view_end or now, now)
         start_time = end_time - self.stats_period_hours * 3600
-        rate_context_hours = max(self.stats_period_hours, RATE_WINDOW_MINUTES / 60)
-        rate_context_points = self.history.chart_points(rate_context_hours)
+        context_start = start_time - RATE_WINDOW_MINUTES * 60
+        rate_context_points = self.history.points_between(context_start, end_time)
         usage_points = [point for point in rate_context_points if point["timestamp"] >= start_time]
+        rate_context_hours = max(self.stats_period_hours, RATE_WINDOW_MINUTES / 60)
         self.stats_usage_points = usage_points
         self.stats_rate_context_points = rate_context_points
         rate_points = [
@@ -3803,9 +3880,11 @@ class UsageApp:
             for point in self.history.token_rate_series(rate_context_hours, rate_context_points)
             if point["timestamp"] >= start_time
         ]
-        current = usage_points[-1]["used_percent"] if usage_points else self.snapshot.used_percent
+        latest_point = usage_points[-1] if usage_points else None
+        live_view = self.stats_view_end is None
+        current = latest_point["used_percent"] if latest_point is not None else (self.snapshot.used_percent if live_view else None)
         five_hour_points = [point for point in usage_points if number(point.get("five_hour_used_percent")) is not None]
-        five_hour_current = five_hour_points[-1]["five_hour_used_percent"] if five_hour_points else self.snapshot.five_hour_used_percent
+        five_hour_current = five_hour_points[-1]["five_hour_used_percent"] if five_hour_points else (self.snapshot.five_hour_used_percent if live_view else None)
         remaining = 100 - current if current is not None else None
         five_hour_remaining = 100 - five_hour_current if five_hour_current is not None else None
         current_rate = None
@@ -3814,11 +3893,26 @@ class UsageApp:
         five_hour_current_rate = None
         if five_hour_points and five_hour_rate_points and abs(five_hour_rate_points[-1]["timestamp"] - five_hour_points[-1]["timestamp"]) <= 1:
             five_hour_current_rate = five_hour_rate_points[-1]["rate_per_hour"]
-        current_token_rate = self._current_token_rate() if not self.snapshot.is_stale else None
-        current_tokens = self.snapshot.total_tokens
-        if current_tokens is None:
-            token_points = [point for point in usage_points if number(point.get("total_tokens")) is not None]
-            current_tokens = token_points[-1]["total_tokens"] if token_points else None
+        current_token_rate = token_rate_points[-1]["token_rate_per_minute"] if token_rate_points else None
+        token_points = [point for point in usage_points if number(point.get("total_tokens")) is not None]
+        current_tokens = token_points[-1]["total_tokens"] if token_points else (self.snapshot.total_tokens if live_view else None)
+        five_hour_reset = (
+            number(five_hour_points[-1].get("five_hour_resets_at"))
+            if five_hour_points
+            else (self.snapshot.five_hour_resets_at if live_view else None)
+        )
+        weekly_reset = (
+            number(latest_point.get("resets_at"))
+            if latest_point is not None
+            else (self.snapshot.resets_at if live_view else None)
+        )
+        last_tokens = (
+            number(latest_point.get("last_tokens"))
+            if latest_point is not None
+            else (self.snapshot.last_tokens if live_view else None)
+        )
+        context_model = latest_point.get("model") if latest_point is not None else (self.snapshot.model if live_view else None)
+        context_effort = latest_point.get("reasoning_effort") if latest_point is not None else (self.snapshot.reasoning_effort if live_view else None)
         tokens_per_point = self.history.token_efficiency(rate_context_hours, rate_context_points)
         five_hour_tokens_per_point = self.history.token_efficiency(
             rate_context_hours,
@@ -3828,16 +3922,16 @@ class UsageApp:
         )
         self.stats_live_card_data = {
             "five_hour_used_percent": five_hour_current,
-            "five_hour_resets_at": self.snapshot.five_hour_resets_at,
+            "five_hour_resets_at": five_hour_reset,
             "used_percent": current,
-            "resets_at": self.snapshot.resets_at,
+            "resets_at": weekly_reset,
             "five_hour_rate_per_hour": five_hour_current_rate,
             "rate_per_hour": current_rate,
             "total_tokens": current_tokens,
-            "last_tokens": self.snapshot.last_tokens,
+            "last_tokens": last_tokens,
             "token_rate_per_minute": current_token_rate,
-            "model": self.snapshot.model,
-            "reasoning_effort": self.snapshot.reasoning_effort,
+            "model": context_model,
+            "reasoning_effort": context_effort,
         }
 
         def rate_text(value: Optional[float]) -> str:
@@ -3860,12 +3954,12 @@ class UsageApp:
         pace_cards = [
             ("5-HOUR PACE", rate_text(five_hour_current_rate), COLORS["cyan"]),
             ("WEEKLY PACE", rate_text(current_rate), COLORS["violet"]),
-            ("5-HOUR ETA", self._format_eta(five_hour_current, five_hour_current_rate, self.snapshot.five_hour_resets_at), COLORS["cyan"]),
-            ("WEEKLY ETA", self._format_eta(current, current_rate, self.snapshot.resets_at), COLORS["violet"]),
+            ("5-HOUR ETA", self._format_eta(five_hour_current, five_hour_current_rate, five_hour_reset), COLORS["cyan"]),
+            ("WEEKLY ETA", self._format_eta(current, current_rate, weekly_reset), COLORS["violet"]),
         ]
         token_cards = [
             ("CURRENT TASK TOKENS", format_token_count(current_tokens), COLORS["mint"]),
-            ("LAST RESPONSE", format_token_count(self.snapshot.last_tokens), COLORS["soft"]),
+            ("LAST RESPONSE", format_token_count(last_tokens), COLORS["soft"]),
             ("TOKEN PACE", format_token_rate(current_token_rate), COLORS["mint"]),
             (
                 "TOKENS / 1%  5H · WEEK",
@@ -4057,10 +4151,15 @@ class UsageApp:
             font=("Segoe UI", 8),
         )
         scope_label = format_statistics_span(self.stats_period_hours)
+        scope_position = (
+            "LATEST"
+            if self.stats_view_end is None
+            else f"ENDING {datetime.fromtimestamp(end_time).astimezone().strftime('%b %d · %I:%M %p').replace(' 0', ' ')}"
+        )
         canvas.create_text(
             18,
             card_layout["history_subtitle_y"],
-            text=f"LAST {scope_label} · sessions packed together",
+            text=f"{scope_label} · {scope_position} · sessions packed together",
             anchor="w",
             fill=COLORS["muted"],
             font=("Segoe UI", 8),
