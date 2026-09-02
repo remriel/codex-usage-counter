@@ -181,6 +181,24 @@ def format_model_effort(model: Any, effort: Any) -> str:
     return " · ".join(value for value in values if value) or "context unavailable"
 
 
+def format_prominent_context(model: Any, effort: Any) -> str:
+    """Turn technical context metadata into a short, prominent display name."""
+
+    raw_model = metadata_text(model)
+    raw_effort = metadata_text(effort)
+    model_name: Optional[str] = None
+    if raw_model:
+        lowered = raw_model.lower()
+        for family in ("sol", "terra", "luna"):
+            if lowered == family or lowered.endswith(f"-{family}"):
+                model_name = family.upper()
+                break
+        if model_name is None:
+            model_name = raw_model.upper()
+    effort_name = raw_effort.replace("_", " ").replace("-", " ").upper() if raw_effort else None
+    return " · ".join(value for value in (model_name, effort_name) if value) or "CONTEXT UNAVAILABLE"
+
+
 def parse_timestamp(value: Any) -> Optional[float]:
     if isinstance(value, (int, float)):
         return float(value)
@@ -1878,6 +1896,7 @@ class UsageApp:
         self.stats_canvas: Optional[tk.Canvas] = None
         self.stats_canvas_size = (0, 0)
         self.stats_readout: Optional[tk.Label] = None
+        self.stats_context_label: Optional[tk.Label] = None
         self.stats_card_label_items: list[int] = []
         self.stats_card_value_items: list[int] = []
         self.stats_live_card_data: dict[str, Any] = {}
@@ -2442,6 +2461,16 @@ class UsageApp:
             highlightthickness=0,
             font=("Segoe UI", 8, "bold"),
         ).pack(side="right", ipadx=10, ipady=3)
+        self.stats_context_label = tk.Label(
+            toolbar,
+            text=format_prominent_context(self.snapshot.model, self.snapshot.reasoning_effort),
+            bg=COLORS["panel_raised"],
+            fg=COLORS["amber"],
+            font=("Segoe UI", 15, "bold"),
+            padx=12,
+            pady=3,
+        )
+        self.stats_context_label.pack(side="right", padx=(0, 14))
 
         period_buttons = tk.Frame(dialog, bg=COLORS["ink"])
         period_buttons.pack(fill="x", padx=18, pady=(0, 7))
@@ -2584,6 +2613,7 @@ class UsageApp:
         self.stats_canvas = None
         self.stats_canvas_size = (0, 0)
         self.stats_readout = None
+        self.stats_context_label = None
         self.stats_card_label_items = []
         self.stats_card_value_items = []
         self.stats_live_card_data = {}
@@ -2591,6 +2621,11 @@ class UsageApp:
         self.stats_rate_context_points = []
         self.stats_plot_points = []
         self.stats_selected_timestamp = None
+
+    def _set_statistics_context(self, model: Any, effort: Any) -> None:
+        if self.stats_context_label is None:
+            return
+        self.stats_context_label.configure(text=format_prominent_context(model, effort))
 
     def _select_statistics_point(self, event: Any) -> None:
         if not self.stats_plot_points or self.stats_plot_end <= self.stats_plot_start:
@@ -2747,18 +2782,18 @@ class UsageApp:
         canvas.delete("stats-selection")
         if self.stats_selected_timestamp is None or not self.stats_plot_points:
             self._update_statistics_cards(None)
+            self._set_statistics_context(self.snapshot.model, self.snapshot.reasoning_effort)
             if self.stats_readout is not None:
-                context = format_model_effort(self.snapshot.model, self.snapshot.reasoning_effort)
                 if self.stats_daily_view or self.stats_weekly_view:
                     interval = "WEEK" if self.stats_weekly_view else "DAY"
                     self.stats_readout.configure(
-                        text=f"LATEST RECORDED {interval}  ·  live context: {context}  ·  click, drag, or scroll through bars"
+                        text=f"LATEST RECORDED {interval}  ·  click, drag, or scroll through bars"
                     )
                 else:
                     self.stats_readout.configure(
                         text=(
                             f"HOURLY · LAST {format_statistics_span(self.stats_period_hours)}  ·  "
-                            f"live context: {context}  ·  inactive time removed · mouse wheel zooms · click or drag inspects a point"
+                            "inactive time removed · mouse wheel zooms · click or drag inspects a point"
                         )
                     )
             return
@@ -2862,12 +2897,10 @@ class UsageApp:
                 )
             local = datetime.fromtimestamp(selected["timestamp"]).astimezone()
             self._update_statistics_cards(selected)
+            self._set_statistics_context(selected.get("model"), selected.get("reasoning_effort"))
             if self.stats_readout is not None:
                 self.stats_readout.configure(
-                    text=(
-                        f"SELECTED {local.strftime('%a, %b %d')}  ·  "
-                        f"ending context: {format_model_effort(selected.get('model'), selected.get('reasoning_effort'))}"
-                    )
+                    text=f"SELECTED {local.strftime('%a, %b %d')}"
                 )
             return
         if used is not None:
@@ -2947,13 +2980,9 @@ class UsageApp:
         local = datetime.fromtimestamp(selected["timestamp"]).astimezone()
         when = f"{local.strftime('%b %d')} {local.strftime('%I:%M %p').lstrip('0')}"
         self._update_statistics_cards(selected)
+        self._set_statistics_context(selected.get("model"), selected.get("reasoning_effort"))
         if self.stats_readout is not None:
-            self.stats_readout.configure(
-                text=(
-                    f"SELECTED {when}  ·  "
-                    f"context: {format_model_effort(selected.get('model'), selected.get('reasoning_effort'))}"
-                )
-            )
+            self.stats_readout.configure(text=f"SELECTED {when}")
 
     def _render_statistics_legacy(self) -> None:
         canvas = self.stats_canvas

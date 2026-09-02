@@ -6,7 +6,7 @@ Make Statistics visually cohesive and immediately understandable, including mode
 
 ## Current state
 
-- Branch: `agent/daily-bar-trend-lines`
+- Branch: `agent/prominent-model-context`
 - Base commit: `93ab1bf` (`Track Codex token usage in real time`)
 - Local telemetry now reports a 300-minute primary window and a 10,080-minute secondary window.
 - The old v1.1.15 executable selects `primary` blindly, causing it to show 5-hour usage as if it were weekly.
@@ -29,6 +29,7 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - Hourly now removes long idle spans from the horizontal layout while breaking each pace path at the activity boundary, so sessions sit together without false straight connectors.
 - Hourly overlays 5-hour and weekly pace in one pane with separate color-coded Y-axes. Weekly is fixed at 0–100 pts/hr; 5-hour remains independently data-scaled.
 - The overlaid-pace production executable is installed and running; the existing public screenshots are intentionally unchanged for this release.
+- Statistics promotes the active or selected model/effort into a large amber header badge, simplifying known model families to names such as `SOL · HIGH` instead of burying the full technical identifier in small helper text.
 
 ## Decisions
 
@@ -53,6 +54,7 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - Keep summary-card geometry centralized and shared between Daily and intraday renderers so chart-space allocation, hierarchy, and selection behavior stay consistent across every Statistics interval.
 - On wide displays, prioritize the charts with a 6×2 card grid; preserve the 4×3 layout below 1,100 canvas pixels so card labels and selected values remain readable.
 - Treat model and effort as timestamped explanatory context—not usage metrics—so their markers never affect allowance, rate, token, or ETA calculations. Do not backfill markers into historical samples that predate metadata collection.
+- Keep the prominent context badge synchronized with chart inspection: live context when no point is selected, and the selected point's context while inspecting history. Shorten known model families (`sol`, `terra`, `luna`) for glanceability while retaining raw metadata in history.
 - Use one targeted full metadata scan for an active session only if the fast file-tail reader has no model/effort context; cache the result and keep normal append updates lightweight.
 - Keep real timestamps and recorded samples, but render Hourly on a compressed active-time x-axis: collapse inactivity longer than the 10-minute local-signal freshness limit to effectively zero horizontal duration, show a small `//` boundary mark, and keep pace paths segmented so sessions are adjacent without false connecting lines. Do not use raw session-file IDs as boundaries because multiple local files can alternate while Codex is continuously active.
 - Keep Hourly usage on the shared 0–100% scale. Overlay 5-hour and weekly pace in one pane so timing changes are easy to compare, but map them to separate color-coded Y-axes because 5-hour pace can be orders of magnitude larger. Fix the Hourly weekly pace Y-axis at 0–100 pts/hr while keeping the 5-hour pace axis independently data-scaled. Preserve session-aware path breaks so the shared pane never implies measurements across inactivity.
@@ -124,7 +126,8 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - `screenshots\counter.png` was refreshed from the running app. `screenshots\statistics.png` uses the exact Statistics image supplied by the user for this release.
 - The overlaid-pace PyInstaller production build completed successfully. The installed executable matches the build (`A6AD7578089382FBCB020708836B41D771B1AEBF81FC0FDAB3ABF8BA8C3AC592`) and the normal packaged parent/child process pair is running. No older versioned executable or source archive remains under Desktop, Downloads, or Documents. GitHub screenshot files were not changed.
 - The Daily stock-style trend-overlay build completed successfully and was installed in place. The installed executable matches the production build (`0C718C34023E30D9D13AE316A5013D11350AD61709C6515E7D4EDBAC78705B6C`). Source compilation and diff checks passed before packaging.
+- The prominent-context production build completed successfully and was installed in place. The installed executable matches the build (`98E60E21D8A46DC4AC3B020EECFADEE8002D4DF050632DAB0BD7E4674F171B2C`). Source compilation and diff checks passed before packaging.
 
 ## Next steps
 
-1. Manually inspect the Daily bar-top trend lines and circular markers before the next public release.
+1. Manually inspect the prominent model/effort badge before the next public release.

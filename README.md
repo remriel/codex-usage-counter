@@ -10,6 +10,7 @@ A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, rese
 - Tracks current-task input, cached-input, output, reasoning, total, and last-response token counts from local Codex aggregate telemetry.
 - Refreshes within about a second when an already-discovered active Codex session file changes; configurable polling remains the fallback.
 - Shows timestamped model and reasoning-effort changes on the detailed Hourly chart with thin, subtle amber model markers and thin, subtle dashed-coral effort markers.
+- Shows the active or selected model and reasoning effort as a large, simplified Statistics header label such as **SOL · HIGH**.
 - Keeps Statistics focused on **Hourly** (the default; mouse-wheel zoom from one minute through all retained history), **Daily**, and **Weekly** views.
 - Displays the most constrained allowance directly in the notification-area tray icon, so the number is useful without hovering; the tooltip identifies both windows.
 - Shows a custom in-app tray milestone popup above the Windows notification area; it does not use Windows toast or balloon notifications.
