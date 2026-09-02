@@ -6,7 +6,7 @@ Make Statistics visually cohesive and immediately understandable, including mode
 
 ## Current state
 
-- Branch: `agent/main-screen-model-context`
+- Branch: `agent/anchored-history-zoom`
 - Base commit: `93ab1bf` (`Track Codex token usage in real time`)
 - Local telemetry now reports a 300-minute primary window and a 10,080-minute secondary window.
 - The old v1.1.15 executable selects `primary` blindly, causing it to show 5-hour usage as if it were weekly.
@@ -31,6 +31,7 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - The overlaid-pace production executable is installed and running; the existing public screenshots are intentionally unchanged for this release.
 - Hourly Statistics promotes the active or selected model/effort into a large amber header badge, simplifying known model families to names such as `SOL · HIGH` instead of burying the full technical identifier in small helper text. Daily and Weekly hide the badge because their aggregate intervals may contain multiple contexts.
 - The main counter repeats the live simplified model/effort directly below `CODEX USAGE` as an amber `TRACKING · SOL · HIGH` header, so the allowance, pace, ETA, and token figures have visible execution context without opening Statistics.
+- Hourly mouse-wheel zoom is cursor-anchored across retained history. Pointing at an older period and scrolling keeps that period in view instead of rebuilding every range against the latest timestamp; cards and the Hourly context badge use the viewport's latest recorded point.
 
 ## Decisions
 
@@ -59,6 +60,7 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - Render the main counter's context from the same live snapshot used by its numeric metrics, so every automatic or manual refresh updates the tracked model/effort and values together.
 - Use one targeted full metadata scan for an active session only if the fast file-tail reader has no model/effort context; cache the result and keep normal append updates lightweight.
 - Keep real timestamps and recorded samples, but render Hourly on a compressed active-time x-axis: collapse inactivity longer than the 10-minute local-signal freshness limit to effectively zero horizontal duration, show a small `//` boundary mark, and keep pace paths segmented so sessions are adjacent without false connecting lines. Do not use raw session-file IDs as boundaries because multiple local files can alternate while Codex is continuously active.
+- Maintain an explicit optional Hourly viewport end. `None` follows live data; a historical timestamp freezes the viewed period while refreshes continue in the background. Wheel zoom derives its anchor from the plotted point under the cursor, clamps the resulting range to retained history, and returns to live mode when its end reaches the newest data.
 - Keep Hourly usage on the shared 0–100% scale. Overlay 5-hour and weekly pace in one pane so timing changes are easy to compare, but map them to separate color-coded Y-axes because 5-hour pace can be orders of magnitude larger. Fix the Hourly weekly pace Y-axis at 0–100 pts/hr while keeping the 5-hour pace axis independently data-scaled. Preserve session-aware path breaks so the shared pane never implies measurements across inactivity.
 
 ## Relevant files
@@ -130,7 +132,8 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - The Daily stock-style trend-overlay build completed successfully and was installed in place. The installed executable matches the production build (`0C718C34023E30D9D13AE316A5013D11350AD61709C6515E7D4EDBAC78705B6C`). Source compilation and diff checks passed before packaging.
 - The prominent-context production build completed successfully and was installed in place. The installed executable matches the build (`98E60E21D8A46DC4AC3B020EECFADEE8002D4DF050632DAB0BD7E4674F171B2C`). Source compilation and diff checks passed before packaging.
 - The main-context/Weekly-trend production build completed successfully and was installed in place. The installed executable matches the build (`D273FFFE72A65341CF4F0661473CB358327ACF4BE5F3A8C184752126AA9F5806`). `screenshots\counter.png` and `screenshots\statistics.png` were refreshed from the packaged app; the main screenshot visibly shows `TRACKING · SOL · LOW`, and the Hourly Statistics screenshot visibly shows the prominent context badge.
+- The cursor-anchored-history production build completed successfully and was installed in place. The installed executable matches the build (`C3C881D4396B64A370850594668EDC5FECB03C8DF7EEB71CA8EDCB2530096019`). A focused fixture confirmed that zooming in over an older x-position reduces the span and retains a historical viewport end instead of snapping to the current time.
 
 ## Next steps
 
-1. Publish the main-context/Weekly-trend build and refreshed screenshots as the next GitHub release.
+1. Manually inspect cursor-anchored Hourly history zoom before the next public release.
