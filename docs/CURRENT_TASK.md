@@ -6,7 +6,7 @@ Make Statistics visually cohesive and immediately understandable, including mode
 
 ## Current state
 
-- Branch: `agent/restore-overlaid-pace`
+- Branch: `agent/daily-bar-trend-lines`
 - Base commit: `93ab1bf` (`Track Codex token usage in real time`)
 - Local telemetry now reports a 300-minute primary window and a 10,080-minute secondary window.
 - The old v1.1.15 executable selects `primary` blindly, causing it to show 5-hour usage as if it were weekly.
@@ -22,7 +22,7 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - Usage bars now occupy two directly labeled small-multiple lanes inside one Usage pane: 5-hour above Weekly, both using the same scale and time axis.
 - Cyan consistently identifies 5-hour data, violet identifies weekly data, and mint identifies token data across cards, bars, pace lines, and selection markers.
 - Usage cards have stronger value typography than pace and token cards; pane headings contain their own direct series keys, removing the detached color legend.
-- Daily Pace now uses two directly labeled zero-baseline lanes with independently rounded scales: 5-hour average pace and weekly average pace. Every Daily series—usage, pace, and token activity—uses full-day bars with no connected data lines. This keeps the values in points per hour while making the smaller weekly day-to-day changes legible instead of flattening them against the regular 0–20/hour scale.
+- Daily Pace uses two directly labeled zero-baseline lanes with independently rounded scales: 5-hour average pace and weekly average pace. Daily usage and pace retain full-day bars and add thin top-center trend lines with circular point markers across adjacent recorded days, matching the supplied stock-app reference; missing calendar days break the lines. Token activity remains bars only. This keeps exact daily magnitude visible while making direction easier to follow.
 - Statistics now adapts its summary grid to the available width: narrow windows retain three 42-pixel rows of four cards, while wide/fullscreen Statistics uses two rows of six cards. The wide layout starts the chart panes at `y=146` rather than `y=192`, and uses tighter pane gaps plus a smaller token allocation to give the actual chart areas substantially more height.
 - Statistics now has three intentional views: Hourly, Daily, and Weekly. Hourly opens by default at one hour and mouse-wheel zooms through readable stops down to one minute and out through all retained history; Daily and Weekly aggregate calendar-aligned bars.
 - Model and reasoning-effort metadata is saved with new local usage samples and annotated only on the detailed Hourly timeline: thin, subtle amber indicates a model transition and thin, subtle dashed coral indicates an effort transition. The selected-point readout shows the active context.
@@ -49,7 +49,7 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - Keep bars for usage, but use aligned series lanes rather than alternating paired bars at each timestamp; this preserves the requested bar encoding without turning dense history into visual texture.
 - Use series identity—not metric type—as the persistent color role. Pace is distinguished by its line mark and pane position, not unrelated coral/amber hues.
 - Render usage lanes as contiguous step-filled blocks: adjacent recorded time bins share an edge and fill from zero to the recorded value. Forward-fill known 5-hour values across later recorded bins, but do not invent values before 5-hour telemetry begins. Daily bars fill their complete calendar-day slot while missing days remain blank.
-- In Daily Pace only, scale each allowance independently from zero with modest headroom and directly display its scale in its own lane. Use the same scale/lane map for the rendered daily bars and selected-point marker; keep every Daily metric bar-based and do not draw connected data lines.
+- In Daily Pace only, scale each allowance independently from zero with modest headroom and directly display its scale in its own lane. Use the same scale/lane map for the rendered daily bars, trend lines, and selected-point marker. Connect only adjacent recorded calendar days; never bridge a missing day. Keep tokens bar-only.
 - Keep summary-card geometry centralized and shared between Daily and intraday renderers so chart-space allocation, hierarchy, and selection behavior stay consistent across every Statistics interval.
 - On wide displays, prioritize the charts with a 6×2 card grid; preserve the 4×3 layout below 1,100 canvas pixels so card labels and selected values remain readable.
 - Treat model and effort as timestamped explanatory context—not usage metrics—so their markers never affect allowance, rate, token, or ETA calculations. Do not backfill markers into historical samples that predate metadata collection.
@@ -123,7 +123,8 @@ Make Statistics visually cohesive and immediately understandable, including mode
 - The final active-time/separate-pace-pane PyInstaller build completed successfully and was installed at `outputs\CodexUsageCounter\CodexUsageCounter.exe`. Its installed SHA-256 matches the build (`F6CB95D658C95F414B5C624549E46981E53D5749E3C10BCCC0785880D36C06B6`), and the normal parent/child packaged process pair launched.
 - `screenshots\counter.png` was refreshed from the running app. `screenshots\statistics.png` uses the exact Statistics image supplied by the user for this release.
 - The overlaid-pace PyInstaller production build completed successfully. The installed executable matches the build (`A6AD7578089382FBCB020708836B41D771B1AEBF81FC0FDAB3ABF8BA8C3AC592`) and the normal packaged parent/child process pair is running. No older versioned executable or source archive remains under Desktop, Downloads, or Documents. GitHub screenshot files were not changed.
+- The Daily stock-style trend-overlay build completed successfully and was installed in place. The installed executable matches the production build (`0C718C34023E30D9D13AE316A5013D11350AD61709C6515E7D4EDBAC78705B6C`). Source compilation and diff checks passed before packaging.
 
 ## Next steps
 
-1. Manually inspect the published overlaid pace pane and report any desired visual adjustments in a new task.
+1. Manually inspect the Daily bar-top trend lines and circular markers before the next public release.
