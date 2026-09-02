@@ -2194,6 +2194,18 @@ class UsageApp:
             self.canvas.create_image(35, 35, image=self.icon_image, anchor="center")
 
         self.canvas.create_text(68, 23, text="CODEX USAGE", anchor="w", fill=COLORS["text"], font=("Segoe UI", 10, "bold"))
+        context_name = format_prominent_context(snapshot.model, snapshot.reasoning_effort)
+        context_text = f"TRACKING · {context_name}"
+        if len(context_text) > 38:
+            context_text = f"{context_text[:35].rstrip()}…"
+        self.canvas.create_text(
+            68,
+            44,
+            text=context_text,
+            anchor="w",
+            fill=COLORS["amber"],
+            font=("Segoe UI", 11, "bold"),
+        )
 
         if not snapshot.has_data:
             status_text, status_color = "WAITING", COLORS["amber"]
@@ -2625,6 +2637,12 @@ class UsageApp:
     def _set_statistics_context(self, model: Any, effort: Any) -> None:
         if self.stats_context_label is None:
             return
+        if self.stats_daily_view or self.stats_weekly_view:
+            if self.stats_context_label.winfo_manager():
+                self.stats_context_label.pack_forget()
+            return
+        if not self.stats_context_label.winfo_manager():
+            self.stats_context_label.pack(side="right", padx=(0, 14))
         self.stats_context_label.configure(text=format_prominent_context(model, effort))
 
     def _select_statistics_point(self, event: Any) -> None:
@@ -3619,17 +3637,15 @@ class UsageApp:
             color: str,
             tag: str,
         ) -> None:
-            """Trace adjacent Daily bar tops without bridging missing calendar days."""
+            """Trace adjacent interval bars without bridging a missing day or week."""
 
-            if is_weekly:
-                return
             coordinates: list[float] = []
             previous_start: Optional[float] = None
             for bucket_start, x, y in points:
                 if previous_start is not None:
                     previous_date = datetime.fromtimestamp(previous_start).astimezone().date()
                     current_date = datetime.fromtimestamp(bucket_start).astimezone().date()
-                    if (current_date - previous_date).days != 1:
+                    if (current_date - previous_date).days != interval_days:
                         if len(coordinates) >= 4:
                             canvas.create_line(*coordinates, fill=COLORS["ink"], width=5, tags=("stats-daily-trend-underlay", tag))
                             canvas.create_line(*coordinates, fill=color, width=2, tags=("stats-daily-trend", tag))

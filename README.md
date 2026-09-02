@@ -7,16 +7,17 @@ A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, rese
 ## What it does
 
 - Shows independent 5-hour and weekly Codex allowance percentages, reset countdowns, pace, and ETA.
+- Shows the currently tracked model and reasoning effort prominently on the main counter, such as **TRACKING · SOL · HIGH**.
 - Tracks current-task input, cached-input, output, reasoning, total, and last-response token counts from local Codex aggregate telemetry.
 - Refreshes within about a second when an already-discovered active Codex session file changes; configurable polling remains the fallback.
 - Shows timestamped model and reasoning-effort changes on the detailed Hourly chart with thin, subtle amber model markers and thin, subtle dashed-coral effort markers.
-- Shows the active or selected model and reasoning effort as a large, simplified Statistics header label such as **SOL · HIGH**.
+- Shows the active or selected model and reasoning effort as a large, simplified **Hourly** Statistics header label such as **SOL · HIGH**; aggregate Daily and Weekly views omit context because it can change within an interval.
 - Keeps Statistics focused on **Hourly** (the default; mouse-wheel zoom from one minute through all retained history), **Daily**, and **Weekly** views.
 - Displays the most constrained allowance directly in the notification-area tray icon, so the number is useful without hovering; the tooltip identifies both windows.
 - Shows a custom in-app tray milestone popup above the Windows notification area; it does not use Windows toast or balloon notifications.
 - Polls local usage every two minutes by default; every automatic read refreshes usage, rate, and ETA together, while **Refresh now** reads immediately outside that schedule.
 - Supports Used or Remaining display mode, always-on-top behavior, optional Start with Windows behavior, optional custom milestone chime, configurable polling, trigger percentage, and popup duration.
-- Keeps minute-level usage history in the zoomable **Hourly** view, plus stock-chart-style **Daily** and **Weekly** intervals with reset-aware 5-hour/weekly totals, pace, and token activity. Daily usage and pace bars include thin trend lines with circular points across adjacent recorded days.
+- Keeps minute-level usage history in the zoomable **Hourly** view, plus stock-chart-style **Daily** and **Weekly** intervals with reset-aware 5-hour/weekly totals, pace, and token activity. Daily and Weekly usage and pace bars include thin trend lines with circular points across adjacent recorded intervals.
 - Opens Statistics as a fullscreen view with a responsive, edge-to-edge chart canvas.
 - Keeps matching 5-hour and weekly cards side by side and updates those cards when an Hourly, Daily, or Weekly point is clicked, dragged across, or selected with the mouse wheel.
 - Provides continuous 5-hour and weekly usage bars in separate lanes, overlays 5-hour and weekly pace in one pane with separate color-coded Y-axes, fixes weekly pace at 0–100 pts/hr while 5-hour pace scales independently, packs active sessions together by removing idle time from the Hourly x-axis, and keeps pace paths broken at every session boundary so no false connecting lines are drawn.
@@ -34,11 +35,11 @@ The executable is self-contained and does not require Python to be installed.
 
 ### Counter window
 
-![Codex Usage Counter showing separate 5-hour and weekly allowance cards, rates, ETAs, and token activity](screenshots/counter.png)
+![Codex Usage Counter showing the tracked model and effort above separate 5-hour and weekly allowance cards, rates, ETAs, and token activity](screenshots/counter.png)
 
 ### Statistics view
 
-![Codex Usage Counter Statistics showing continuous filled 5-hour and weekly usage bars, separate rate lines, and token activity](screenshots/statistics.png)
+![Codex Usage Counter Hourly Statistics showing the prominent model and effort context, continuous 5-hour and weekly usage, pace lines, and token activity](screenshots/statistics.png)
 
 ## How the data is read
 
