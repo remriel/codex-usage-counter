@@ -1913,6 +1913,8 @@ class UsageApp:
         self.stats_rate_context_points: list[dict[str, Any]] = []
         self.stats_period_hours = 1.0
         self.stats_view_end: Optional[float] = None
+        self.stats_pan_start_x: Optional[float] = None
+        self.stats_pan_start_end: Optional[float] = None
         self.stats_daily_view = False
         self.stats_weekly_view = False
         self.stats_plot_points: list[dict[str, Any]] = []
@@ -2536,6 +2538,9 @@ class UsageApp:
         self.stats_canvas.pack(fill="both", expand=True)
         self.stats_canvas.bind("<Button-1>", self._select_statistics_point)
         self.stats_canvas.bind("<B1-Motion>", self._select_statistics_point)
+        self.stats_canvas.bind("<ButtonPress-3>", self._begin_statistics_pan)
+        self.stats_canvas.bind("<B3-Motion>", self._pan_statistics)
+        self.stats_canvas.bind("<ButtonRelease-3>", self._end_statistics_pan)
         self.stats_canvas.bind("<MouseWheel>", self._zoom_statistics_with_wheel)
         self.stats_canvas.bind("<Configure>", self._resize_statistics)
         dialog.protocol("WM_DELETE_WINDOW", self.close_statistics)
@@ -2681,6 +2686,46 @@ class UsageApp:
         )
         return "break"
 
+    def _begin_statistics_pan(self, event: Any) -> str:
+        """Start grab-style horizontal panning without changing left-click selection."""
+
+        if self.stats_daily_view or self.stats_weekly_view:
+            return "break"
+        self.stats_pan_start_x = float(getattr(event, "x", 0.0))
+        self.stats_pan_start_end = self.stats_view_end or self.stats_plot_end or time.time()
+        if self.stats_canvas is not None:
+            self.stats_canvas.configure(cursor="fleur")
+        return "break"
+
+    def _pan_statistics(self, event: Any) -> str:
+        """Pan Hourly left or right while preserving the current zoom span."""
+
+        if (
+            self.stats_daily_view
+            or self.stats_weekly_view
+            or self.stats_pan_start_x is None
+            or self.stats_pan_start_end is None
+        ):
+            return "break"
+        plot_width = max(1.0, float(self.stats_plot_right - self.stats_plot_left))
+        drag_pixels = float(getattr(event, "x", self.stats_pan_start_x)) - self.stats_pan_start_x
+        span_seconds = self.stats_period_hours * 3600
+        desired_end = self.stats_pan_start_end - (drag_pixels / plot_width) * span_seconds
+        oldest = min((point["timestamp"] for point in self.history.points), default=time.time())
+        newest = max(time.time(), max((point["timestamp"] for point in self.history.points), default=0.0))
+        view_end = clamp(desired_end, min(oldest + span_seconds, newest), newest)
+        self.stats_view_end = None if newest - view_end < 1 else view_end
+        self.stats_selected_timestamp = None
+        self._render_statistics()
+        return "break"
+
+    def _end_statistics_pan(self, _event: Any) -> str:
+        self.stats_pan_start_x = None
+        self.stats_pan_start_end = None
+        if self.stats_canvas is not None:
+            self.stats_canvas.configure(cursor="")
+        return "break"
+
     def close_statistics(self) -> None:
         if self.stats_window is not None:
             try:
@@ -2700,6 +2745,8 @@ class UsageApp:
         self.stats_plot_points = []
         self.stats_selected_timestamp = None
         self.stats_view_end = None
+        self.stats_pan_start_x = None
+        self.stats_pan_start_end = None
 
     def _set_statistics_context(self, model: Any, effort: Any) -> None:
         if self.stats_context_label is None:
@@ -2886,7 +2933,7 @@ class UsageApp:
                     self.stats_readout.configure(
                         text=(
                             f"HOURLY · {format_statistics_span(self.stats_period_hours)} · {position}  ·  "
-                            "point and wheel to zoom anywhere · click or drag inspects a point"
+                            "point + wheel zooms · right-drag pans · left-drag inspects"
                         )
                     )
             return
