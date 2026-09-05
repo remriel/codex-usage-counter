@@ -4,9 +4,11 @@ import ctypes
 import ctypes.wintypes as wintypes
 from bisect import bisect_left, bisect_right
 import json
+import heapq
 import math
 import os
 import queue
+import stat
 import subprocess
 import sys
 import threading
@@ -160,8 +162,9 @@ def number(value: Any) -> Optional[float]:
     try:
         if value is None or value == "":
             return None
-        return float(value)
-    except (TypeError, ValueError):
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) else None
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -189,7 +192,7 @@ def format_prominent_context(model: Any, effort: Any) -> str:
     model_name: Optional[str] = None
     if raw_model:
         lowered = raw_model.lower()
-        for family in ("sol", "terra", "luna"):
+        for family in ("astra", "sol", "terra", "luna"):
             if lowered == family or lowered.endswith(f"-{family}"):
                 model_name = family.upper()
                 break
@@ -201,7 +204,7 @@ def format_prominent_context(model: Any, effort: Any) -> str:
 
 def parse_timestamp(value: Any) -> Optional[float]:
     if isinstance(value, (int, float)):
-        return float(value)
+        return number(value)
     if not isinstance(value, str):
         return None
     try:
@@ -1057,6 +1060,8 @@ class CodexTelemetryReader:
 
     @staticmethod
     def _rate_limits(event: dict[str, Any]) -> Optional[dict[str, Any]]:
+        if not isinstance(event, dict):
+            return None
         payload = event.get("payload")
         if not isinstance(payload, dict):
             return None
@@ -1072,6 +1077,8 @@ class CodexTelemetryReader:
     def _event_context(event: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
         """Extract only model/effort metadata from known Codex session structures."""
 
+        if not isinstance(event, dict):
+            return None, None
         payload = event.get("payload")
         if not isinstance(payload, dict):
             return None, None
@@ -1196,16 +1203,23 @@ class CodexTelemetryReader:
         return five_hour, weekly
 
     def _candidate_files(self) -> list[Path]:
+        candidates: list[tuple[int, str, Path]] = []
         try:
-            files = [
-                item
-                for item in self.sessions_dir.rglob("*.jsonl")
-                if item.is_file()
-            ]
+            for item in self.sessions_dir.rglob("*.jsonl"):
+                try:
+                    metadata = item.stat()
+                    if not stat.S_ISREG(metadata.st_mode):
+                        continue
+                except OSError:
+                    continue
+                entry = (metadata.st_mtime_ns, str(item), item)
+                if len(candidates) < 48:
+                    heapq.heappush(candidates, entry)
+                elif entry > candidates[0]:
+                    heapq.heapreplace(candidates, entry)
         except OSError:
-            return []
-        files.sort(key=lambda item: item.stat().st_mtime, reverse=True)
-        return files[:48]
+            pass
+        return [entry[2] for entry in sorted(candidates, reverse=True)]
 
     def _current_day_directory(self) -> Path:
         local = datetime.now()
@@ -1259,6 +1273,8 @@ class CodexTelemetryReader:
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
                 continue
             timestamp = parse_timestamp(event.get("timestamp")) or file_mtime
             if contains_context:
@@ -1495,7 +1511,7 @@ if os.name == "nt":
             ("cbWndExtra", ctypes.c_int),
             ("hInstance", wintypes.HINSTANCE),
             ("hIcon", wintypes.HICON),
-            ("hCursor", wintypes.HCURSOR),
+            ("hCursor", wintypes.HANDLE),
             ("hbrBackground", wintypes.HBRUSH),
             ("lpszMenuName", wintypes.LPCWSTR),
             ("lpszClassName", wintypes.LPCWSTR),
