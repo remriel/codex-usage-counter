@@ -7,7 +7,7 @@ A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, rese
 ## What it does
 
 - Shows independent 5-hour and weekly Codex allowance percentages, reset countdowns, pace, and ETA.
-- Shows the currently tracked model and reasoning effort prominently on the main counter, such as **TRACKING · SOL · HIGH**.
+- Shows the currently tracked model and reasoning effort prominently on the main counter, including **ASTRA**, **SOL**, **TERRA**, and **LUNA**, such as **TRACKING · ASTRA · HIGH**.
 - Tracks current-task input, cached-input, output, reasoning, total, and last-response token counts from local Codex aggregate telemetry.
 - Refreshes within about a second when an already-discovered active Codex session file changes; configurable polling remains the fallback.
 - Shows timestamped model and reasoning-effort changes on the detailed Hourly chart with thin, subtle amber model markers and thin, subtle dashed-coral effort markers.
@@ -62,6 +62,8 @@ python .\codex_usage_counter.py
 ```
 
 The source app uses Python’s built-in Tk interface and Windows APIs for the tray icon. It has no third-party runtime dependency.
+
+Run the synthetic telemetry regression tests with `python -m unittest -v`. These cover model labels, invalid telemetry, swapped allowance windows, and session discovery. Discovery retains only the 48 newest candidates while scanning, and skips files that disappear during the scan.
 
 ## Build a standalone executable
 
