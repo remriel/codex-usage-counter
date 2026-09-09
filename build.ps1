@@ -22,6 +22,9 @@ try {
         --icon $icon `
         --add-data 'assets;assets' `
         codex_usage_counter.py
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyInstaller failed with exit code $LASTEXITCODE. Do not publish the existing executable."
+    }
 } finally {
     Pop-Location
 }

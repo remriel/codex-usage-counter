@@ -1,5 +1,19 @@
 # Current task
 
+## September 8, 2026 — v1.1.24 release work (current)
+
+- Objective: fix concrete bugs, improve interaction performance, add reset notifications, package and publish.
+- Source baseline: main at `ab4aadf`, preserving v1.1.23 Astra/telemetry improvements. Older entries below are historical, not pending instructions.
+- Implemented: custom combined 5-hour/weekly reset popup on a confirmed newer reset boundary; quiet startup, duplicate/out-of-order/stale suppression, Used/Remaining and existing duration/sound settings preserved. No Windows notification APIs or countdown-based fabricated resets.
+- Fixed: historical card ETAs use sample timestamps; rounded cards have one perimeter instead of six overlapping outlines; aggregate pace heading no longer says overlaid; build aborts on PyInstaller failure.
+- Performance: right-drag redraws coalesced at 33ms and flushed on release; pending callbacks canceled on close; view changes end panning; hovering the same selected point does not redraw cards.
+- Verification: all 10 unittest cases pass, including reset detection without a percentage drop, correction/stale suppression, duplicate suppression, historical ETA and pan scheduling; diff whitespace check passed.
+- Relevant files: `codex_usage_counter.py`, `test_codex_usage_counter.py`, `build.ps1`, `README.md`.
+- Constraints: local telemetry cannot confirm a reset until Codex records it; reset baselines are in-memory. Screenshots unchanged. Do not repeat the false straight-line interpolation approach described below.
+- Verified production build, real Tk polygon/custom-popup smoke, and full source app startup. Installed SHA-256: `93E8A8619E300C346E3E5BD95B1F2E7244DC6A9CB44F15118EF63E26E655B515`. Packaged main window is responsive with live dual-window values.
+- Installation discovery: former outputs directory was missing; recreated canonical install. An older `Downloads/CodexUsageCounter (1).exe` held the single-instance mutex; stopped its two processes and launched the canonical new executable. The Downloads file remains on disk; history/settings were not removed.
+- Next: publish v1.1.24 with executable and source archive. No known blocking issues from these checks; broader manual multi-monitor/long-running QA remains outside the verified scope.
+
 ## Objective
 
 Make Statistics visually cohesive and immediately understandable, including model/effort context and a focused three-view navigation model.

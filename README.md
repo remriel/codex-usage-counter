@@ -24,6 +24,8 @@ A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, rese
 
 ## Quick start on Windows
 
+The app also shows a custom tray-area popup when fresh telemetry confirms a 5-hour or weekly reset while it is running. Reset alerts follow Used/Remaining, popup duration, and sound settings. They do not use Windows notifications. A reset is reported when Codex writes the new allowance window, not simply when a countdown reaches zero; startup establishes a quiet baseline.
+
 1. Download `CodexUsageCounter.exe` from the [latest release](../../releases/latest).
 2. Run it. The app starts in the notification area and opens its counter window.
 3. Use **Settings** to choose Used or Remaining, enable or disable Start with Windows, and adjust polling or milestone behavior.

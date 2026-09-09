@@ -1910,6 +1910,7 @@ class UsageApp:
         self.snapshot = UsageSnapshot()
         self.last_checked_at: Optional[float] = None
         self.last_alert_buckets: dict[str, int] = {}
+        self.last_alert_windows: dict[str, tuple[float, Optional[float], float]] = {}
         self.refresh_in_flight = False
         self.refresh_after_id: Optional[str] = None
         self.icon_image: Optional[tk.PhotoImage] = None
@@ -1931,6 +1932,7 @@ class UsageApp:
         self.stats_view_end: Optional[float] = None
         self.stats_pan_start_x: Optional[float] = None
         self.stats_pan_start_end: Optional[float] = None
+        self.stats_pan_redraw_id: Optional[str] = None
         self.stats_daily_view = False
         self.stats_weekly_view = False
         self.stats_plot_points: list[dict[str, Any]] = []
@@ -2028,12 +2030,12 @@ class UsageApp:
         return button
 
     def _rounded_rect(self, x1: int, y1: int, x2: int, y2: int, radius: int, fill: str, outline: str = "") -> None:
-        self.canvas.create_rectangle(x1 + radius, y1, x2 - radius, y2, fill=fill, outline=outline)
-        self.canvas.create_rectangle(x1, y1 + radius, x2, y2 - radius, fill=fill, outline=outline)
-        self.canvas.create_oval(x1, y1, x1 + radius * 2, y1 + radius * 2, fill=fill, outline=outline)
-        self.canvas.create_oval(x2 - radius * 2, y1, x2, y1 + radius * 2, fill=fill, outline=outline)
-        self.canvas.create_oval(x1, y2 - radius * 2, x1 + radius * 2, y2, fill=fill, outline=outline)
-        self.canvas.create_oval(x2 - radius * 2, y2 - radius * 2, x2, y2, fill=fill, outline=outline)
+        self.canvas.create_polygon(
+            x1 + radius, y1, x2 - radius, y1, x2, y1, x2, y1 + radius,
+            x2, y2 - radius, x2, y2, x2 - radius, y2, x1 + radius, y2,
+            x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
+            smooth=True, splinesteps=24, fill=fill, outline=outline,
+        )
 
     def _display_percent(self, snapshot: UsageSnapshot) -> Optional[float]:
         available = [
@@ -2090,6 +2092,7 @@ class UsageApp:
         current: Optional[float],
         rate: Optional[float],
         resets_at: Optional[float] = None,
+        as_of: Optional[float] = None,
     ) -> str:
         if current is None or not math.isfinite(current):
             return "n/a"
@@ -2100,7 +2103,7 @@ class UsageApp:
         hours_to_limit = (100 - current) / rate
         if not math.isfinite(hours_to_limit) or hours_to_limit < 0:
             return "n/a"
-        now = time.time()
+        now = as_of if as_of is not None else time.time()
         if (
             resets_at is not None
             and math.isfinite(resets_at)
@@ -2400,15 +2403,31 @@ class UsageApp:
         self.refresh_async()
 
     def _maybe_show_milestone(self, result: UsageSnapshot) -> None:
+        if result.is_stale or result.timestamp is None:
+            return
         alerts: list[str] = []
-        for key, label, used_percent in (
-            ("5-hour", "5H", result.five_hour_used_percent),
-            ("weekly", "WEEK", result.used_percent),
+        for key, label, used_percent, reset_at in (
+            ("5-hour", "5H", result.five_hour_used_percent, result.five_hour_resets_at),
+            ("weekly", "WEEK", result.used_percent, result.resets_at),
         ):
             if used_percent is None:
                 continue
+            prior = self.last_alert_windows.get(key)
+            if prior is not None and result.timestamp <= prior[2]:
+                continue
+            self.last_alert_windows[key] = (used_percent, reset_at, result.timestamp)
+            # A newer reset boundary confirms a new allowance window. A drop
+            # alone can be a telemetry correction, so do not call it a reset.
+            reset = prior is not None and prior[1] is not None and (
+                (reset_at is not None and reset_at > prior[1] + 2
+                 and result.timestamp >= prior[1] - 2)
+            )
             bucket = int(used_percent // self.settings.milestone_step)
             previous = self.last_alert_buckets.get(key)
+            if reset:
+                self.last_alert_buckets[key] = bucket
+                alerts.append(f"{label} reset · {self._display_value(used_percent):.0f}% {self._display_label()}")
+                continue
             if previous is None or bucket < previous:
                 # Establish a baseline or quietly re-arm after that window resets.
                 self.last_alert_buckets[key] = bucket
@@ -2586,6 +2605,7 @@ class UsageApp:
         self._render_statistics()
 
     def set_stats_period(self, hours: float, view_end: Optional[float] = None) -> None:
+        self._end_statistics_pan(None)
         self.stats_period_hours = max(STATS_MIN_HOURLY_ZOOM_MINUTES / 60, float(hours))
         self.stats_view_end = view_end
         self.stats_daily_view = False
@@ -2597,6 +2617,7 @@ class UsageApp:
         self.set_stats_period(1.0)
 
     def set_stats_daily(self) -> None:
+        self._end_statistics_pan(None)
         self.stats_period_hours = float(HISTORY_RETENTION_DAYS * 24)
         self.stats_view_end = None
         self.stats_daily_view = True
@@ -2605,6 +2626,7 @@ class UsageApp:
         self._render_statistics()
 
     def set_stats_weekly(self) -> None:
+        self._end_statistics_pan(None)
         self.stats_period_hours = float(HISTORY_RETENTION_DAYS * 24)
         self.stats_view_end = None
         self.stats_daily_view = False
@@ -2732,10 +2754,19 @@ class UsageApp:
         view_end = clamp(desired_end, min(oldest + span_seconds, newest), newest)
         self.stats_view_end = None if newest - view_end < 1 else view_end
         self.stats_selected_timestamp = None
-        self._render_statistics()
+        if self.stats_pan_redraw_id is None:
+            self.stats_pan_redraw_id = self.root.after(33, self._flush_statistics_pan)
         return "break"
 
+    def _flush_statistics_pan(self) -> None:
+        self.stats_pan_redraw_id = None
+        if self.stats_canvas is not None:
+            self._render_statistics()
+
     def _end_statistics_pan(self, _event: Any) -> str:
+        if self.stats_pan_redraw_id is not None:
+            self.root.after_cancel(self.stats_pan_redraw_id)
+            self._flush_statistics_pan()
         self.stats_pan_start_x = None
         self.stats_pan_start_end = None
         if self.stats_canvas is not None:
@@ -2743,6 +2774,10 @@ class UsageApp:
         return "break"
 
     def close_statistics(self) -> None:
+        if self.stats_pan_redraw_id is not None:
+            self.root.after_cancel(self.stats_pan_redraw_id)
+            self.stats_pan_redraw_id = None
+        self.stats_pan_start_x = self.stats_pan_start_end = None
         if self.stats_window is not None:
             try:
                 self.stats_window.destroy()
@@ -2788,6 +2823,8 @@ class UsageApp:
             fraction = (x - self.stats_plot_left) / (self.stats_plot_right - self.stats_plot_left)
             target = self.stats_plot_start + fraction * (self.stats_plot_end - self.stats_plot_start)
             selected = min(self.stats_plot_points, key=lambda point: abs(point["timestamp"] - target))
+        if self.stats_selected_timestamp == selected["timestamp"]:
+            return
         self.stats_selected_timestamp = selected["timestamp"]
         self._draw_statistics_selection()
 
@@ -2911,8 +2948,8 @@ class UsageApp:
             percent_text(100 - weekly_used if weekly_used is not None else None),
             self._format_rate(five_hour_rate),
             self._format_rate(weekly_rate),
-            self._format_eta(five_hour_used, five_hour_rate, five_hour_reset),
-            self._format_eta(weekly_used, weekly_rate, weekly_reset),
+            self._format_eta(five_hour_used, five_hour_rate, five_hour_reset, number(data.get("timestamp"))),
+            self._format_eta(weekly_used, weekly_rate, weekly_reset, number(data.get("timestamp"))),
             format_token_count(total_tokens),
             format_token_count(last_tokens),
             format_token_rate(token_rate),
@@ -3289,7 +3326,7 @@ class UsageApp:
 
         panes = (
             ("usage", usage_label, COLORS["soft"]),
-            ("rate", "PACE · OVERLAID — INDEPENDENT Y-AXES", COLORS["soft"]),
+            ("rate", "PACE · INDEPENDENT Y-AXES" if self.stats_daily_view or self.stats_weekly_view else "PACE · OVERLAID — INDEPENDENT Y-AXES", COLORS["soft"]),
             ("token", token_label, COLORS["mint"]),
         )
         for key, label, color in panes:
@@ -3984,6 +4021,7 @@ class UsageApp:
             resets_field="five_hour_resets_at",
         )
         self.stats_live_card_data = {
+            "timestamp": number(latest_point.get("timestamp")) if latest_point else end,
             "five_hour_used_percent": five_hour_current,
             "five_hour_resets_at": five_hour_reset,
             "used_percent": current,
@@ -4555,7 +4593,7 @@ class UsageApp:
         sound_var = tk.BooleanVar(value=self.settings.sound_alert)
         tk.Checkbutton(
             body,
-            text="Play a sound at milestones",
+            text="Sound for milestones and resets",
             variable=sound_var,
             bg=COLORS["panel"],
             fg=COLORS["text"],
