@@ -14,6 +14,7 @@
 - Installation discovery: former outputs directory was missing; recreated canonical install. An older `Downloads/CodexUsageCounter (1).exe` held the single-instance mutex; stopped its two processes and launched the canonical new executable. The Downloads file remains on disk; history/settings were not removed.
 - Published: https://github.com/remriel/codex-usage-counter/releases/tag/v1.1.24 — executable and source archive both uploaded; GitHub executable digest matches the installed build. Release source commit: `7897385`.
 - Next: no release work pending. No known blocking issues from these checks; broader manual multi-monitor/long-running QA remains outside the verified scope.
+- Follow-up requested: publish a new maintenance release from the current synchronized source as v1.1.25.
 
 ## Objective
 
