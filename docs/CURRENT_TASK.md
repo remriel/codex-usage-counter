@@ -12,7 +12,8 @@
 - Constraints: local telemetry cannot confirm a reset until Codex records it; reset baselines are in-memory. Screenshots unchanged. Do not repeat the false straight-line interpolation approach described below.
 - Verified production build, real Tk polygon/custom-popup smoke, and full source app startup. Installed SHA-256: `93E8A8619E300C346E3E5BD95B1F2E7244DC6A9CB44F15118EF63E26E655B515`. Packaged main window is responsive with live dual-window values.
 - Installation discovery: former outputs directory was missing; recreated canonical install. An older `Downloads/CodexUsageCounter (1).exe` held the single-instance mutex; stopped its two processes and launched the canonical new executable. The Downloads file remains on disk; history/settings were not removed.
-- Next: publish v1.1.24 with executable and source archive. No known blocking issues from these checks; broader manual multi-monitor/long-running QA remains outside the verified scope.
+- Published: https://github.com/remriel/codex-usage-counter/releases/tag/v1.1.24 — executable and source archive both uploaded; GitHub executable digest matches the installed build. Release source commit: `7897385`.
+- Next: no release work pending. No known blocking issues from these checks; broader manual multi-monitor/long-running QA remains outside the verified scope.
 
 ## Objective
 
