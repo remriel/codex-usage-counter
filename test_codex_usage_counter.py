@@ -9,6 +9,19 @@ import codex_usage_counter as app
 
 
 class TelemetryTests(unittest.TestCase):
+    def test_token_rate_series_keeps_observed_and_smoothed_rates(self):
+        history = app.UsageHistory()
+        points = [
+            {"timestamp": 1000.0, "used_percent": 1.0, "resets_at": 10000.0, "total_tokens": 100.0, "session_id": "task"},
+            {"timestamp": 1060.0, "used_percent": 1.1, "resets_at": 10000.0, "total_tokens": 1100.0, "session_id": "task"},
+            {"timestamp": 1120.0, "used_percent": 1.2, "resets_at": 10000.0, "total_tokens": 1700.0, "session_id": "task"},
+        ]
+        series = history.token_rate_series(1, points)
+        self.assertEqual(len(series), 2)
+        self.assertEqual(series[0]["raw_token_rate_per_minute"], 1000.0)
+        self.assertEqual(series[1]["raw_token_rate_per_minute"], 600.0)
+        self.assertLess(series[1]["token_rate_per_minute"], series[0]["token_rate_per_minute"])
+
     def test_model_labels(self):
         for family in ('astra', 'sol', 'terra', 'luna'):
             self.assertEqual(app.format_prominent_context('gpt-6-' + family, 'high'), family.upper() + ' · HIGH')

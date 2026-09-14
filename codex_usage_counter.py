@@ -942,6 +942,7 @@ class UsageHistory:
                     {
                         "timestamp": point["timestamp"],
                         "token_rate_per_minute": max(0.0, smoothed),
+                        "raw_token_rate_per_minute": max(0.0, raw_rate),
                         "total_tokens": token_total,
                         "session_id": session_id,
                     }
@@ -1959,6 +1960,7 @@ class UsageApp:
         self.stats_token_top = 0
         self.stats_token_bottom = 0
         self.stats_token_scale = 1.0
+        self.stats_token_rate_scale = 1.0
         self.stats_selected_timestamp: Optional[float] = None
         self.canvas = tk.Canvas(
             self.root,
@@ -3088,6 +3090,22 @@ class UsageApp:
                     width=2,
                     tags="stats-selection",
                 )
+            token_rate = number(selected.get("token_rate_per_minute"))
+            if token_rate is not None and self.stats_token_rate_scale > 0:
+                token_rate_y = self.stats_token_top + (
+                    (self.stats_token_rate_scale - clamp(token_rate, 0, self.stats_token_rate_scale))
+                    / self.stats_token_rate_scale
+                ) * (self.stats_token_bottom - self.stats_token_top)
+                canvas.create_oval(
+                    x - 5,
+                    token_rate_y - 5,
+                    x + 5,
+                    token_rate_y + 5,
+                    fill=COLORS["coral"],
+                    outline=COLORS["ink"],
+                    width=2,
+                    tags="stats-selection",
+                )
             local = datetime.fromtimestamp(selected["timestamp"]).astimezone()
             self._update_statistics_cards(selected)
             self._set_statistics_context(selected.get("model"), selected.get("reasoning_effort"))
@@ -3126,16 +3144,16 @@ class UsageApp:
                 width=2,
                 tags="stats-selection",
             )
-        if token_rate is not None and self.stats_token_scale > 0:
+        if token_rate is not None and self.stats_token_rate_scale > 0:
             token_y = self.stats_token_top + (
-                (self.stats_token_scale - clamp(token_rate, 0, self.stats_token_scale)) / self.stats_token_scale
+                (self.stats_token_rate_scale - clamp(token_rate, 0, self.stats_token_rate_scale)) / self.stats_token_rate_scale
             ) * (self.stats_token_bottom - self.stats_token_top)
             canvas.create_oval(
                 x - 5,
                 token_y - 5,
                 x + 5,
                 token_y + 5,
-                fill=COLORS["mint"],
+                fill=COLORS["coral"],
                 outline=COLORS["ink"],
                 width=2,
                 tags="stats-selection",
@@ -3721,7 +3739,7 @@ class UsageApp:
             right,
             geometry,
             f"USAGE TOTALS · POINTS / {interval_label.upper()}",
-            f"{interval_name} TOKEN TOTAL",
+            f"{interval_name} TOKENS · LINE TOKENS/MIN",
         )
 
         usage_values = [
@@ -3910,9 +3928,19 @@ class UsageApp:
         else:
             token_scale = 1_000.0
         self.stats_token_scale = token_scale
+        token_rate_values = [
+            float(point["token_rate_per_minute"])
+            for point in daily_points
+            if number(point.get("token_rate_per_minute")) is not None
+            and math.isfinite(float(point["token_rate_per_minute"]))
+        ]
+        self.stats_token_rate_scale = nice_positive_scale(max(token_rate_values, default=0.0))
         canvas.create_line(left, token_bottom, right, token_bottom, fill=COLORS["soft"], width=2)
         canvas.create_text(canvas_width - 10, token_top, text=format_token_count(token_scale), anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         canvas.create_text(canvas_width - 10, token_bottom, text="0", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
+        canvas.create_text(left + 7, token_top, text=format_token_rate(self.stats_token_rate_scale), anchor="nw", fill=COLORS["coral"], font=("Segoe UI", 8))
+        canvas.create_text(left + 7, token_bottom, text="0/min", anchor="sw", fill=COLORS["coral"], font=("Segoe UI", 8))
+        token_rate_trend: list[tuple[float, float, float]] = []
         for point in daily_points:
             bucket_start = number(point.get(bucket_key))
             if bucket_start is None:
@@ -3932,6 +3960,14 @@ class UsageApp:
                 outline="",
                 tags="stats-daily-token-bar",
             )
+            token_rate = number(point.get("token_rate_per_minute"))
+            if token_rate is not None:
+                rate_y = token_top + (
+                    (self.stats_token_rate_scale - clamp(token_rate, 0, self.stats_token_rate_scale))
+                    / self.stats_token_rate_scale
+                ) * (token_bottom - token_top)
+                token_rate_trend.append((bucket_start, (bar_left + bar_right) / 2, rate_y))
+        draw_daily_bar_trend(token_rate_trend, COLORS["coral"], "stats-token-rate-trend")
 
         def axis_label(epoch: float) -> str:
             return datetime.fromtimestamp(epoch).astimezone().strftime("%b %d")
@@ -4293,7 +4329,7 @@ class UsageApp:
             right,
             geometry,
             "USAGE HISTORY · 0–100%",
-            "TOKEN ACTIVITY",
+            "TOKEN ACTIVITY · BARS + TOKENS/MIN LINE",
         )
         last_break_x = -math.inf
         for break_timestamp in recording_break_starts:
@@ -4470,7 +4506,12 @@ class UsageApp:
             )
         if not rate_points and not five_hour_rate_points:
             canvas.create_text((left + right) / 2, (rate_top + rate_bottom) / 2, text="More samples are needed to estimate a trend rate.", fill=COLORS["muted"], font=("Segoe UI", 10))
-        token_values = [point["token_rate_per_minute"] for point in token_rate_points if math.isfinite(point["token_rate_per_minute"])]
+        token_values = [
+            float(point["raw_token_rate_per_minute"])
+            for point in token_rate_points
+            if number(point.get("raw_token_rate_per_minute")) is not None
+            and math.isfinite(float(point["raw_token_rate_per_minute"]))
+        ]
         if token_values:
             observed_token_max = max(token_values)
             magnitude = 10 ** math.floor(math.log10(max(1.0, observed_token_max)))
@@ -4478,6 +4519,12 @@ class UsageApp:
         else:
             token_scale = 1_000.0
         self.stats_token_scale = token_scale
+        smoothed_token_values = [
+            float(point["token_rate_per_minute"])
+            for point in token_rate_points
+            if math.isfinite(point["token_rate_per_minute"])
+        ]
+        self.stats_token_rate_scale = nice_positive_scale(max(smoothed_token_values + token_values, default=0.0))
         canvas.create_line(left, token_bottom, right, token_bottom, fill=COLORS["soft"], width=2)
         canvas.create_text(canvas_width - 10, token_top, text=format_token_rate(token_scale), anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
         canvas.create_text(canvas_width - 10, token_bottom, text="0/min", anchor="e", fill=COLORS["muted"], font=("Segoe UI", 8))
@@ -4485,10 +4532,23 @@ class UsageApp:
             bar_width = max(1, min(8, int((right - left) / max(1, len(token_rate_points)) * 0.7)))
             for point in token_rate_points:
                 x = x_for(point["timestamp"])
+                raw_rate = number(point.get("raw_token_rate_per_minute"))
+                if raw_rate is None:
+                    raw_rate = point["token_rate_per_minute"]
                 y = token_top + (
-                    (token_scale - clamp(point["token_rate_per_minute"], 0, token_scale)) / token_scale
+                    (token_scale - clamp(raw_rate, 0, token_scale)) / token_scale
                 ) * (token_bottom - token_top)
                 canvas.create_line(x, token_bottom, x, y, fill=COLORS["mint"], width=bar_width)
+            draw_recorded_segments(
+                token_rate_points,
+                lambda point: token_top
+                + (
+                    (self.stats_token_rate_scale - clamp(point["token_rate_per_minute"], 0, self.stats_token_rate_scale))
+                    / self.stats_token_rate_scale
+                )
+                * (token_bottom - token_top),
+                COLORS["coral"],
+            )
         else:
             canvas.create_text((left + right) / 2, (token_top + token_bottom) / 2, text="Token activity appears after two current-task samples.", fill=COLORS["muted"], font=("Segoe UI", 9))
 
