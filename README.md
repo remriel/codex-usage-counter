@@ -51,6 +51,10 @@ The counter reads aggregate `rate_limits` and `token_count` events, plus the mod
 %USERPROFILE%\.codex\sessions
 ```
 
+The session source is selected in this order: an explicit `codex_home` path in `settings.json`, then an existing `%USERPROFILE%\.codex-chatgpt` directory, then `CODEX_HOME`, and finally `%USERPROFILE%\.codex`. A configured path is used as-is even when it is missing, so a missing explicit path reports no telemetry instead of silently reading a different profile's sessions. This lets the counter track the ChatGPT allowance when a separate DeepSeek profile also writes local sessions without changing behavior for single-profile setups.
+
+Statistics history is kept per source so DeepSeek and ChatGPT samples cannot mix. The canonical default `%USERPROFILE%\.codex` source keeps using the existing `usage_history.json` (preserved, never migrated or deleted); every other source stores its samples in a separate `usage_history-<digest>.json` named by a hash of the resolved, case-normalized home path. Settings remain global.
+
 The reader identifies allowance windows by their reported duration: 300 minutes for the 5-hour limit and 10,080 minutes for the weekly limit. It does not assume `primary` always means weekly, so both windows remain correct if their field positions change. Historical weekly samples remain available; the 5-hour history begins when Codex first reports that window and is not fabricated for earlier periods.
 
 It does not read `auth.json`, API keys, cookies, browser profiles, or store conversation content. The only extra session context it retains is a short model identifier and reasoning-effort value, timestamped with a local usage sample. Token totals are scoped to the currently active local Codex task. Token-to-percentage statistics are observed relationships, not fixed conversions: model behavior, caching, reasoning, concurrent tasks, and delayed allowance reporting can change them. The usage dashboard link opens the official dashboard for the authoritative view. Because the counter is based on local session telemetry, it can show a stale signal until a newer Codex event is written; **Refresh now** forces an immediate local read.
@@ -76,7 +80,9 @@ python -m pip install pyinstaller
 .\build.ps1
 ```
 
-The build script regenerates the numeric tray icon set in `assets\taskbar` and creates `dist\CodexUsageCounter.exe` with PyInstaller.
+The build script regenerates the numeric tray icon set in `assets\taskbar` and creates `dist\CodexUsageCounter.exe` with PyInstaller. Pass `-SkipAssetGeneration` to reuse the existing approved icons and sounds instead of regenerating them.
+
+Before PyInstaller runs, `build.ps1` invokes `scripts\prepare_tk_data.py`. Python 3.14 on Windows ships Tcl/Tk as zip archives that PyInstaller's hooks cannot collect; the helper stages those libraries and the build adds `_tcl_data`/`_tk_data` so the frozen app can start. On normal (unzipped) Tcl/Tk installs the helper reports `zip_based: false` and the standard hooks are used; if staging fails the build stops rather than publishing a stale executable.
 
 ## Start with Windows
 

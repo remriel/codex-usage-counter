@@ -1,11 +1,94 @@
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch, Mock
 
 import codex_usage_counter as app
+
+
+_FALL_BACK_AT = 1_000_000.0
+
+
+class _NonWholeHourLocalTime(datetime):
+    """datetime stand-in pinning the local timezone to UTC+05:30."""
+
+    @classmethod
+    def fromtimestamp(cls, timestamp, tz=None):
+        return super().fromtimestamp(timestamp, tz=timezone(timedelta(hours=5, minutes=30)))
+
+    def astimezone(self, tz=None):
+        return self if tz is None else super().astimezone(tz)
+
+
+class _RepeatedHourLocalTime(datetime):
+    """datetime stand-in whose local zone falls back UTC-04:00 to UTC-05:00 at a fixed instant."""
+
+    @classmethod
+    def fromtimestamp(cls, timestamp, tz=None):
+        offset = timedelta(hours=-4) if timestamp < _FALL_BACK_AT else timedelta(hours=-5)
+        return super().fromtimestamp(timestamp, tz=timezone(offset))
+
+    def astimezone(self, tz=None):
+        return self if tz is None else super().astimezone(tz)
+
+
+def _history_with_points(points):
+    history = app.UsageHistory.__new__(app.UsageHistory)
+    history.points = points
+    history._last_saved_at = 0.0
+    history._daily_cache_key = None
+    history._daily_cache = []
+    return history
+
+
+def _history_point(timestamp):
+    return {"timestamp": float(timestamp), "used_percent": 1.0}
+
+
+def _session_event(timestamp, weekly_used, five_hour_used, resets_at=10000.0):
+    """One session line carrying model/effort context plus both allowance windows."""
+
+    return {
+        'timestamp': timestamp,
+        'payload': {
+            'model': 'gpt-6-astra',
+            'effort': 'ultra',
+            'rate_limits': {
+                'plan_type': 'pro',
+                'primary': {'window_minutes': 10080, 'used_percent': weekly_used, 'resets_at': resets_at},
+                'secondary': {'window_minutes': 300, 'used_percent': five_hour_used, 'resets_at': resets_at},
+            },
+        },
+    }
+
+
+class UsageHistoryHourlyTests(unittest.TestCase):
+    def test_hourly_collapses_by_local_hour_with_non_whole_hour_offset(self):
+        # UTC+05:30: 99000/101000 are 03:30/04:03 UTC, both inside the 09:xx local hour.
+        points = [_history_point(96300), _history_point(99000), _history_point(101000), _history_point(106200)]
+        history = _history_with_points(points)
+        with patch.object(app.time, "time", return_value=110000.0), patch.object(app, "datetime", _NonWholeHourLocalTime):
+            result = history.hourly(24)
+        self.assertEqual([point["timestamp"] for point in result], [96300.0, 101000.0, 106200.0])
+
+    def test_hourly_uses_local_hour_boundary_not_utc_hour_boundary(self):
+        # UTC+05:30: local 09:00 begins at 03:30 UTC, mid-way through the UTC hour.
+        points = [_history_point(98999), _history_point(99000)]
+        history = _history_with_points(points)
+        with patch.object(app.time, "time", return_value=110000.0), patch.object(app, "datetime", _NonWholeHourLocalTime):
+            result = history.hourly(24)
+        self.assertEqual([point["timestamp"] for point in result], [98999.0, 99000.0])
+
+    def test_hourly_keeps_distinct_repeated_dst_hours(self):
+        first = _FALL_BACK_AT - 3000.0   # 01:11 -04:00
+        second = _FALL_BACK_AT + 600.0   # same 01:11 wall clock, one hour later at -05:00
+        history = _history_with_points([_history_point(first), _history_point(second)])
+        with patch.object(app.time, "time", return_value=1_010_000.0), patch.object(app, "datetime", _RepeatedHourLocalTime):
+            result = history.hourly(24)
+        self.assertEqual([point["timestamp"] for point in result], [first, second])
 
 
 class TelemetryTests(unittest.TestCase):
@@ -66,7 +149,202 @@ class TelemetryTests(unittest.TestCase):
             paths = list(reader.sessions_dir.glob('*.jsonl')) + [missing]
             with patch.object(Path, 'rglob', return_value=iter(paths)):
                 result = reader._candidate_files()
-            self.assertEqual([int(path.stem) for path in result], list(range(59, 11, -1)))
+            self.assertEqual([int(path.stem) for path, _metadata in result], list(range(59, 11, -1)))
+
+    def test_unchanged_file_second_read_stats_candidate_once_and_preserves_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            reader = app.CodexTelemetryReader()
+            reader.sessions_dir = Path(directory)
+            session_path = Path(directory) / 'session.jsonl'
+            session_path.write_text(json.dumps(_session_event(100, 10, 20)), encoding='utf-8')
+            real_stat = Path.stat
+            candidate_stats = []
+
+            def counting_stat(path, *args, **kwargs):
+                if path == session_path:
+                    candidate_stats.append(path)
+                return real_stat(path, *args, **kwargs)
+
+            with patch.object(Path, 'stat', counting_stat):
+                first = reader.read()
+                candidate_stats.clear()
+                second = reader.read()
+                second_refresh_stats = len(candidate_stats)
+            # The cache-hit refresh must not re-stat the selected candidate after discovery.
+            self.assertEqual(second_refresh_stats, 1)
+            self.assertEqual(first, second)
+            self.assertEqual(second.used_percent, 10)
+            self.assertEqual(second.five_hour_used_percent, 20)
+            self.assertEqual(second.timestamp, 100.0)
+
+    def test_changed_file_invalidates_cache_and_refreshes_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            reader = app.CodexTelemetryReader()
+            reader.sessions_dir = Path(directory)
+            session_path = Path(directory) / 'session.jsonl'
+            session_path.write_text(json.dumps(_session_event(100, 10, 20)), encoding='utf-8')
+            first = reader.read()
+            session_path.write_text(json.dumps(_session_event(200, 30, 40)), encoding='utf-8')
+            os.utime(session_path, ns=(2_000_000_000_000_000_000, 2_000_000_000_000_000_000))
+            second = reader.read()
+            self.assertEqual(first.used_percent, 10)
+            self.assertNotEqual(first, second)
+            self.assertEqual(second.used_percent, 30)
+            self.assertEqual(second.five_hour_used_percent, 40)
+            self.assertEqual(second.timestamp, 200.0)
+            metadata = os.stat(session_path)
+            cached = reader._file_cache[str(session_path)]
+            self.assertEqual(cached[:2], (metadata.st_mtime_ns, metadata.st_size))
+            self.assertEqual(cached[2], second)
+
+
+class SourceSelectionTests(unittest.TestCase):
+    def test_explicit_setting_wins_over_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            explicit = Path(directory) / 'explicit-chatgpt'
+            legacy = Path(directory) / 'legacy-deepseek'
+            (legacy / 'sessions').mkdir(parents=True)
+            with patch.dict(os.environ, {'CODEX_HOME': str(legacy)}), \
+                    patch.object(app, 'chatgpt_codex_home', return_value=legacy):
+                reader = app.CodexTelemetryReader(str(explicit))
+            self.assertEqual(reader.codex_home, explicit)
+            self.assertEqual(reader.sessions_dir, explicit / 'sessions')
+
+    def test_chatgpt_home_preferred_over_environment_when_present(self):
+        with tempfile.TemporaryDirectory() as directory:
+            chatgpt = Path(directory) / '.codex-chatgpt'
+            legacy = Path(directory) / 'legacy-deepseek'
+            (chatgpt / 'sessions').mkdir(parents=True)
+            (legacy / 'sessions').mkdir(parents=True)
+            with patch.dict(os.environ, {'CODEX_HOME': str(legacy)}), \
+                    patch.object(app, 'chatgpt_codex_home', return_value=chatgpt):
+                reader = app.CodexTelemetryReader()
+            self.assertEqual(reader.codex_home, chatgpt)
+            self.assertEqual(reader.sessions_dir, chatgpt / 'sessions')
+
+    def test_explicit_missing_path_does_not_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            explicit = Path(directory) / 'missing-chatgpt'
+            chatgpt = Path(directory) / '.codex-chatgpt'
+            (chatgpt / 'sessions').mkdir(parents=True)
+            with patch.dict(os.environ, {'CODEX_HOME': str(chatgpt)}), \
+                    patch.object(app, 'chatgpt_codex_home', return_value=chatgpt):
+                reader = app.CodexTelemetryReader(str(explicit))
+                result = reader.read()
+            self.assertEqual(reader.sessions_dir, explicit / 'sessions')
+            self.assertFalse(reader.sessions_dir.exists())
+            self.assertEqual(result.error, 'Codex session telemetry is not available yet')
+
+    def test_legacy_behavior_without_split_setup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            legacy = Path(directory) / 'legacy-codex'
+            (legacy / 'sessions').mkdir(parents=True)
+            absent_chatgpt = Path(directory) / 'absent-chatgpt'
+            with patch.dict(os.environ, {'CODEX_HOME': str(legacy)}), \
+                    patch.object(app, 'chatgpt_codex_home', return_value=absent_chatgpt):
+                reader = app.CodexTelemetryReader()
+            self.assertEqual(reader.sessions_dir, legacy / 'sessions')
+
+            with patch.dict(os.environ), patch.object(
+                app, 'chatgpt_codex_home', return_value=absent_chatgpt
+            ):
+                os.environ.pop('CODEX_HOME', None)
+                reader = app.CodexTelemetryReader()
+            self.assertEqual(reader.sessions_dir, Path.home() / '.codex' / 'sessions')
+
+    def test_codex_home_setting_defaults_empty_and_round_trips(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_dir = Path(directory)
+            config_file = config_dir / 'settings.json'
+            config_file.write_text(json.dumps({'display_mode': 'remaining'}), encoding='utf-8')
+            with patch.object(app, 'CONFIG_DIR', config_dir), patch.object(app, 'CONFIG_FILE', config_file):
+                settings = app.AppSettings.load()
+                self.assertEqual(settings.codex_home, '')
+                settings.codex_home = r'C:\Users\Gev\.codex-chatgpt'
+                settings.save()
+                persisted = json.loads(config_file.read_text(encoding='utf-8'))
+                self.assertEqual(persisted['codex_home'], r'C:\Users\Gev\.codex-chatgpt')
+                self.assertEqual(app.AppSettings.load().codex_home, r'C:\Users\Gev\.codex-chatgpt')
+
+
+class HistoryIsolationTests(unittest.TestCase):
+    def test_default_codex_home_keeps_legacy_history_file(self):
+        config_dir = Path('sentinel-config')
+        legacy_file = config_dir / 'usage_history.json'
+        with patch.object(app, 'HISTORY_FILE', legacy_file):
+            path = app.history_path_for_codex_home(Path.home() / '.codex')
+        self.assertEqual(path, legacy_file)
+
+    def test_chatgpt_home_gets_deterministic_hashed_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_dir = root / 'config'
+            chatgpt = root / '.codex-chatgpt'
+            (chatgpt / 'sessions').mkdir(parents=True)
+            with patch.object(app, 'CONFIG_DIR', config_dir), \
+                    patch.object(app, 'HISTORY_FILE', config_dir / 'usage_history.json'):
+                first = app.history_path_for_codex_home(chatgpt)
+                second = app.history_path_for_codex_home(chatgpt)
+                default = app.history_path_for_codex_home(Path.home() / '.codex')
+            self.assertEqual(first, second)
+            self.assertEqual(first.parent, config_dir)
+            self.assertEqual(default, config_dir / 'usage_history.json')
+            self.assertNotEqual(first, default)
+            self.assertRegex(first.name, r'^usage_history-[0-9a-f]{16}\.json$')
+            self.assertNotIn(chatgpt.name, first.name)
+
+    def test_equivalent_normalized_home_paths_share_one_history_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_dir = root / 'config'
+            chatgpt = root / '.codex-chatgpt'
+            (chatgpt / 'sessions').mkdir(parents=True)
+            equivalent = chatgpt / 'sessions' / '..'
+            with patch.object(app, 'CONFIG_DIR', config_dir):
+                direct = app.history_path_for_codex_home(chatgpt)
+                round_trip = app.history_path_for_codex_home(equivalent)
+            self.assertEqual(direct, round_trip)
+            self.assertRegex(direct.name, r'^usage_history-[0-9a-f]{16}\.json$')
+
+    @unittest.skipUnless(os.name == 'nt', 'case-insensitive path comparison is Windows-specific')
+    def test_windows_case_variants_share_one_history_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_dir = root / 'config'
+            chatgpt = root / '.codex-chatgpt'
+            with patch.object(app, 'CONFIG_DIR', config_dir):
+                direct = app.history_path_for_codex_home(chatgpt)
+                variant = app.history_path_for_codex_home(Path(str(chatgpt).upper()))
+            self.assertEqual(direct, variant)
+
+    def test_two_sources_do_not_share_history_samples(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_dir = root / 'config'
+            chatgpt = root / '.codex-chatgpt'
+            with patch.object(app, 'CONFIG_DIR', config_dir), \
+                    patch.object(app, 'HISTORY_FILE', config_dir / 'usage_history.json'):
+                default_path = app.history_path_for_codex_home(Path.home() / '.codex')
+                chatgpt_path = app.history_path_for_codex_home(chatgpt)
+                default_history = app.UsageHistory(default_path)
+                chatgpt_history = app.UsageHistory(chatgpt_path)
+                with patch.object(app.time, 'time', return_value=10_000.0):
+                    default_history.record(app.UsageSnapshot(
+                        used_percent=10.0, window_minutes=10080, resets_at=100_000.0, timestamp=9_999.0))
+                reloaded_default = app.UsageHistory(default_path)
+                reloaded_chatgpt = app.UsageHistory(chatgpt_path)
+            self.assertEqual(len(reloaded_default.points), 1)
+            self.assertEqual(reloaded_chatgpt.points, [])
+            self.assertTrue(default_path.exists())
+            self.assertFalse(chatgpt_path.exists())
+
+            with patch.object(app.time, 'time', return_value=20_000.0):
+                reloaded_chatgpt.record(app.UsageSnapshot(
+                    used_percent=90.0, window_minutes=10080, resets_at=100_000.0, timestamp=19_999.0))
+            default_payload = json.loads(default_path.read_text(encoding='utf-8'))
+            chatgpt_payload = json.loads(chatgpt_path.read_text(encoding='utf-8'))
+            self.assertEqual([point['used_percent'] for point in default_payload], [10.0])
+            self.assertEqual([point['used_percent'] for point in chatgpt_payload], [90.0])
 
 
 class AppRegressionTests(unittest.TestCase):
