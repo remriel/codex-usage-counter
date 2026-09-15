@@ -4,6 +4,7 @@ import ctypes
 import ctypes.wintypes as wintypes
 from bisect import bisect_left, bisect_right
 import json
+import hashlib
 import heapq
 import math
 import os
@@ -296,6 +297,7 @@ class AppSettings:
     milestone_step: int = 10
     milestone_duration: int = 5
     refresh_interval_seconds: int = 120
+    codex_home: str = ""
 
     @classmethod
     def load(cls) -> "AppSettings":
@@ -315,6 +317,9 @@ class AppSettings:
         refresh_interval_seconds = int(number(payload.get("refresh_interval_seconds")) or REFRESH_SECONDS)
         if refresh_interval_seconds not in (15, 30, 60, 120, 300, 600, 900):
             refresh_interval_seconds = REFRESH_SECONDS
+        codex_home = payload.get("codex_home")
+        if not isinstance(codex_home, str):
+            codex_home = ""
         return cls(
             display_mode=display_mode,
             always_on_top=bool(payload.get("always_on_top", True)),
@@ -323,6 +328,7 @@ class AppSettings:
             milestone_step=milestone_step,
             milestone_duration=milestone_duration,
             refresh_interval_seconds=refresh_interval_seconds,
+            codex_home=codex_home.strip(),
         )
 
     def save(self) -> None:
@@ -338,6 +344,7 @@ class AppSettings:
                         "milestone_step": self.milestone_step,
                         "milestone_duration": self.milestone_duration,
                         "refresh_interval_seconds": self.refresh_interval_seconds,
+                        "codex_home": self.codex_home,
                     },
                     indent=2,
                 ),
@@ -350,8 +357,9 @@ class AppSettings:
 class UsageHistory:
     """Small local sample store for the optional statistics view."""
 
-    def __init__(self) -> None:
-        self.points: list[dict[str, Any]] = self._load()
+    def __init__(self, path: Optional[Path] = None) -> None:
+        self.path = Path(path) if path is not None else HISTORY_FILE
+        self.points: list[dict[str, Any]] = self._load(self.path)
         self._last_saved_at = 0.0
         self._daily_cache_key: Optional[tuple[Any, ...]] = None
         self._daily_cache: list[dict[str, Any]] = []
@@ -489,9 +497,10 @@ class UsageHistory:
         return cleaned[-HISTORY_MAX_POINTS:]
 
     @classmethod
-    def _load(cls) -> list[dict[str, Any]]:
+    def _load(cls, path: Optional[Path] = None) -> list[dict[str, Any]]:
+        source = path if path is not None else HISTORY_FILE
         try:
-            payload = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+            payload = json.loads(source.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError):
             return []
         if not isinstance(payload, list):
@@ -568,8 +577,8 @@ class UsageHistory:
         if not force and now - self._last_saved_at < 30:
             return
         try:
-            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            HISTORY_FILE.write_text(json.dumps(self.points), encoding="utf-8")
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(self.points), encoding="utf-8")
             self._last_saved_at = now
         except OSError:
             pass
@@ -581,9 +590,10 @@ class UsageHistory:
     def hourly(self, hours: float) -> list[dict[str, Any]]:
         """Collapse samples to the latest reading in each local hour bucket."""
 
-        buckets: dict[int, dict[str, Any]] = {}
+        buckets: dict[float, dict[str, Any]] = {}
         for point in self.since(hours):
-            bucket = int(point["timestamp"] // 3600) * 3600
+            local = datetime.fromtimestamp(point["timestamp"]).astimezone()
+            bucket = local.replace(minute=0, second=0, microsecond=0).timestamp()
             buckets[bucket] = point
         return [buckets[key] for key in sorted(buckets)]
 
@@ -1020,16 +1030,58 @@ class UsageSnapshot:
         return bool(self.timestamp and time.time() - self.timestamp > ACTIVE_SIGNAL_MAX_AGE_SECONDS)
 
 
+def chatgpt_codex_home() -> Path:
+    """Default ChatGPT Codex home used when no source is configured explicitly."""
+
+    return Path.home() / ".codex-chatgpt"
+
+
+def history_path_for_codex_home(codex_home: Path) -> Path:
+    """Return the usage-history file belonging to a telemetry source.
+
+    The canonical default ``~/.codex`` keeps the legacy ``usage_history.json``
+    so existing installs retain their samples after upgrading. Any other source
+    gets a deterministic ``usage_history-<digest>.json`` next to it, hashed from
+    the resolved, case-normalized home path so equivalent spellings share one
+    file without exposing the raw path in the filename.
+    """
+
+    legacy = HISTORY_FILE
+    canonical_default = (Path.home() / ".codex").resolve()
+    resolved = Path(codex_home).expanduser().resolve()
+    normalized = os.path.normcase(str(resolved))
+    if normalized == os.path.normcase(str(canonical_default)):
+        return legacy
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+    return CONFIG_DIR / f"usage_history-{digest}.json"
+
+
 class CodexTelemetryReader:
     """Read the latest rate-limit event already written by local Codex sessions.
 
     This deliberately limits itself to the sessions directory. It does not open
     auth.json, API keys, cookies, or any browser profile data.
+
+    Source selection: an explicit ``codex_home`` (from settings) always wins,
+    even when the path is missing. Otherwise an existing ``~/.codex-chatgpt``
+    directory is preferred over ``CODEX_HOME`` so a DeepSeek-configured process
+    cannot silently redirect the counter. Without a split setup the previous
+    ``CODEX_HOME``/``~/.codex`` behavior is unchanged.
     """
 
-    def __init__(self) -> None:
-        configured_home = os.environ.get("CODEX_HOME")
-        self.codex_home = Path(configured_home).expanduser() if configured_home else Path.home() / ".codex"
+    def __init__(self, codex_home: Optional[str] = None) -> None:
+        explicit_home = codex_home.strip() if isinstance(codex_home, str) else ""
+        if explicit_home:
+            self.codex_home = Path(explicit_home).expanduser()
+        else:
+            chatgpt_home = chatgpt_codex_home()
+            configured_home = os.environ.get("CODEX_HOME")
+            if chatgpt_home.is_dir():
+                self.codex_home = chatgpt_home
+            elif configured_home:
+                self.codex_home = Path(configured_home).expanduser()
+            else:
+                self.codex_home = Path.home() / ".codex"
         self.sessions_dir = self.codex_home / "sessions"
         self._file_cache: dict[str, tuple[int, int, Optional[UsageSnapshot]]] = {}
         self._latest_snapshot: Optional[UsageSnapshot] = None
@@ -1203,8 +1255,8 @@ class CodexTelemetryReader:
                 weekly = windows[0]
         return five_hour, weekly
 
-    def _candidate_files(self) -> list[Path]:
-        candidates: list[tuple[int, str, Path]] = []
+    def _candidate_files(self) -> list[tuple[Path, os.stat_result]]:
+        candidates: list[tuple[int, str, Path, os.stat_result]] = []
         try:
             for item in self.sessions_dir.rglob("*.jsonl"):
                 try:
@@ -1213,14 +1265,14 @@ class CodexTelemetryReader:
                         continue
                 except OSError:
                     continue
-                entry = (metadata.st_mtime_ns, str(item), item)
+                entry = (metadata.st_mtime_ns, str(item), item, metadata)
                 if len(candidates) < 48:
                     heapq.heappush(candidates, entry)
                 elif entry > candidates[0]:
                     heapq.heapreplace(candidates, entry)
         except OSError:
             pass
-        return [entry[2] for entry in sorted(candidates, reverse=True)]
+        return [(entry[2], entry[3]) for entry in sorted(candidates, reverse=True)]
 
     def _current_day_directory(self) -> Path:
         local = datetime.now()
@@ -1363,11 +1415,9 @@ class CodexTelemetryReader:
 
         latest: Optional[tuple[float, UsageSnapshot]] = None
         next_cache: dict[str, tuple[int, int, Optional[UsageSnapshot]]] = {}
-        for path in self._candidate_files():
-            try:
-                metadata = path.stat()
-            except OSError:
-                continue
+        # Discovery already statted each selected candidate, so the refresh reuses
+        # those signatures for cache hits instead of statting the files again.
+        for path, metadata in self._candidate_files():
             cache_key = str(path)
             signature = (metadata.st_mtime_ns, metadata.st_size)
             cached = self._file_cache.get(cache_key)
@@ -1906,8 +1956,8 @@ class UsageApp:
         except tk.TclError:
             pass
 
-        self.reader = CodexTelemetryReader()
-        self.history = UsageHistory()
+        self.reader = CodexTelemetryReader(self.settings.codex_home)
+        self.history = UsageHistory(history_path_for_codex_home(self.reader.codex_home))
         self.snapshot = UsageSnapshot()
         self.last_checked_at: Optional[float] = None
         self.last_alert_buckets: dict[str, int] = {}

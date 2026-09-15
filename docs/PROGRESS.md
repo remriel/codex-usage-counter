@@ -1,39 +1,34 @@
-# Current progress
+# Usage Counter Correctness, Performance, and Packaging Fixes
 
 ## Objective
 
-Add a tokens/min trend overlay to the Statistics token activity pane without changing the existing usage or pace calculations.
+Fix source-selection, history-isolation, hourly-bucketing, and refresh-performance issues on branch `fix/usage-counter-correctness-performance`, and make the Windows build work with Python 3.14's zip-packaged Tcl/Tk.
 
-## Current state
+## Implementation
 
-- Repository: `work/codex-usage-counter`, clean at the start of this task.
-- Existing Statistics views: Hourly, Daily, Weekly.
-- Hourly token activity currently renders point-to-point token throughput as bars.
-- Daily and Weekly token activity currently renders total-token bars and now has a plotted tokens/min overlay with a separate rate scale.
+- Source selection: an explicit `codex_home` from `settings.json` always wins (used as-is even when missing), then an existing `~/.codex-chatgpt`, then `CODEX_HOME`, then `~/.codex`. Single-profile behavior is unchanged.
+- Per-source history isolation: canonical `~/.codex` keeps the legacy `usage_history.json` (preserved, never migrated or deleted); every other source uses `usage_history-<digest>.json` where the digest is the first 16 hex chars of `sha256(os.path.normcase(resolved_home))`, so DeepSeek and ChatGPT samples cannot mix.
+- Hourly bucketing: `UsageHistory.hourly` collapses samples on local-hour boundaries via `datetime.fromtimestamp(...).astimezone()` instead of `timestamp // 3600`, fixing UTC+05:30 offsets and DST fall-back duplicates.
+- Refresh performance: `CodexTelemetryReader._candidate_files()` returns `(Path, os.stat_result)` pairs so cache-hit refreshes reuse the discovery stat instead of statting each selected candidate again; newest-48 ranking, tie order, unreadable-file skips, and signature-based invalidation are unchanged.
+- Packaging: `build.ps1` gained `-SkipAssetGeneration` and calls `scripts/prepare_tk_data.py`, which stages zip-packaged Tcl/Tk into `_tcl_data`/`_tk_data` (Tcl/Tk 9 on Python 3.14 Windows) that PyInstaller's hooks miss. `scripts/test_prepare_tk_data.py` proves archive-controlled prefixes cannot extract or delete outside `<build_dir>/tk_staging`.
 
-## Decisions
+## Tests
 
-- Keep token activity bars and add a clearly labeled contrasting tokens/min line.
-- Use separate token-count and tokens/min scales in Daily and Weekly because those are different units.
-- In Hourly, use observed point-to-point throughput for the bars and the smoothed tokens/min series for the overlay line. In Daily and Weekly, retain total-token bars and plot the aggregate average tokens/min line.
-- Preserve session-aware gaps; the overlay must not connect across inactive intervals.
+- Full suite: `python -m pytest -q` → **33 passed, 27 subtests passed** (source selection, history isolation, local-hour bucketing, stat/cache invalidation, extraction safety, plus existing regressions).
+- `git diff --check` clean; `python -m py_compile` passed.
 
-## Verification plan
+## Build and deployment
 
-- Add regression coverage for raw and smoothed token-rate values.
-- Run the existing Python tests and a Tk chart-render smoke check.
-- Build the Windows executable once after source changes.
+- Rebuilt `dist\CodexUsageCounter.exe` with PyInstaller through `build.ps1` (`-SkipAssetGeneration`); SHA-256 `7F643EAB1480834F79AAE4B79A37406D0963429EC2FF588149D705F06FCBED9F`.
+- Replaced the previous stable executable at `%LOCALAPPDATA%\Programs\CodexUsageCounter` with the new build; the installed hash matches and the old executable was sent to the Recycle Bin.
+- Packaged smoke test showed a live title with both `5H` and `Week` values. The stable running process is using the ChatGPT profile and its hashed history file; the legacy `usage_history.json` remains unchanged.
+- Settings pinned to `C:\Users\Gev\.codex-chatgpt`; mixed legacy history preserved with backup at `%APPDATA%\CodexUsageCounter\backup-20260914-171835`.
+- The executable is not committed; `dist/`, `build/`, work logs, and regenerated assets stay out of git.
 
-## Completed
+## GitHub sync
 
-- Added a coral tokens/min trend line over the token activity pane in Hourly, Daily, and Weekly Statistics.
-- Hourly bars now show observed point-to-point token throughput while the line shows the smoothed tokens/min pace; inactive-session gaps remain blank.
-- Daily and Weekly retain total-token bars and add a tokens/min line with a separate rate scale so counts and rates are not mixed on one axis.
-- Selection markers now track the tokens/min line as well as the token-total bar.
-- Updated the README feature description and added regression coverage for observed versus smoothed token rates.
-- Verification passed: `python -m py_compile`, 11 unittest cases, `git diff --check`, and a real Tk render smoke through Hourly, Daily, and Weekly Statistics.
-- Built and installed the current executable at `outputs\\CodexUsageCounter\\CodexUsageCounter.exe`; installed SHA-256 is `70783A34280BA6E035D6F4FE26E7F259F5A134FC8EB5E8211D30AD06462EFC99`. Two canonical packaged processes are running.
+- Source, tests, README, progress, `build.ps1`, and Tcl/Tk staging scripts are ready to commit and push on `fix/usage-counter-correctness-performance`; the requested v1.1.26 release is pending publication.
 
 ## Next steps
 
-No task work remains. Source synchronization is the final step; publishing a new GitHub release was not requested.
+- Commit and push the verified source, publish v1.1.26 with the executable and matching source archive, then record the final release URL and commit/artifact hashes here.
