@@ -45,13 +45,13 @@ The executable is self-contained and does not require Python to be installed.
 
 ## How the data is read
 
-The counter reads aggregate `rate_limits` and `token_count` events, plus the model and reasoning-effort metadata required for chart annotations, from JSONL files under:
+The counter reads aggregate `rate_limits` and `token_count` events, plus the model and reasoning-effort metadata required for chart annotations, from JSONL files under the selected Codex home:
 
 ```text
-%USERPROFILE%\.codex\sessions
+<selected Codex home>\sessions
 ```
 
-The session source is selected in this order: an explicit `codex_home` path in `settings.json`, then an existing `%USERPROFILE%\.codex-chatgpt` directory, then `CODEX_HOME`, and finally `%USERPROFILE%\.codex`. A configured path is used as-is even when it is missing, so a missing explicit path reports no telemetry instead of silently reading a different profile's sessions. This lets the counter track the ChatGPT allowance when a separate DeepSeek profile also writes local sessions without changing behavior for single-profile setups.
+The session source is selected in this order: an explicit `codex_home` path in `settings.json`, then an existing `%USERPROFILE%\.codex-chatgpt` directory, then `CODEX_HOME`, and finally `%USERPROFILE%\.codex`. With your two-profile setup, this means the counter follows the ChatGPT instance by default instead of the DeepSeek instance. A configured path is used as-is even when it is missing, so a missing explicit path reports no telemetry instead of silently reading a different profile's sessions. Set `codex_home` to `%USERPROFILE%\.codex` if you intentionally want to monitor the DeepSeek profile.
 
 Statistics history is kept per source so DeepSeek and ChatGPT samples cannot mix. The canonical default `%USERPROFILE%\.codex` source keeps using the existing `usage_history.json` (preserved, never migrated or deleted); every other source stores its samples in a separate `usage_history-<digest>.json` named by a hash of the resolved, case-normalized home path. Settings remain global.
 
