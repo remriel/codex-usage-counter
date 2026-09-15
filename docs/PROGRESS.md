@@ -27,8 +27,10 @@ Fix source-selection, history-isolation, hourly-bucketing, and refresh-performan
 
 ## GitHub sync
 
-- Source, tests, README, progress, `build.ps1`, and Tcl/Tk staging scripts are ready to commit and push on `fix/usage-counter-correctness-performance`; the requested v1.1.26 release is pending publication.
+- PR #36 was merged into `main`; release commit `213cf210c20d741006eb1a81b73276d2e2cafc59` contains the verified source, tests, README, progress, `build.ps1`, and Tcl/Tk staging scripts.
+- Published [v1.1.26](https://github.com/remriel/codex-usage-counter/releases/tag/v1.1.26) with the Windows executable and matching source archive. GitHub asset digests are executable `sha256:7f643eab1480834f79aae4b79a37406d0963429ec2ff588149d705f06fcbed9f` and source `sha256:4d600a81886794a6229c5b050437e42f569c1cec5953673166bbd459d0364224`.
+- The prior installed executable, three stale Downloads copies, and the stale plugin output were sent to the Recycle Bin; the stable install and plugin output now match the v1.1.26 executable.
 
 ## Next steps
 
-- Commit and push the verified source, publish v1.1.26 with the executable and matching source archive, then record the final release URL and commit/artifact hashes here.
+- No release work remains. Future app changes should start from `main` and update this handoff after each verified build or release.
