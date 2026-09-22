@@ -65,6 +65,53 @@ def _session_event(timestamp, weekly_used, five_hour_used, resets_at=10000.0):
     }
 
 
+class _QuietTray:
+    def __init__(self, *_args):
+        pass
+
+    def start(self, *_args):
+        pass
+
+    def poll_actions(self):
+        pass
+
+    def update_tooltip(self, *_args):
+        pass
+
+    def update_icon(self, *_args):
+        pass
+
+    def stop(self):
+        pass
+
+
+@unittest.skipUnless(os.name == 'nt', 'Tk statistics view is Windows-only')
+class StatisticsRenderTests(unittest.TestCase):
+    def test_empty_history_renders_hourly_daily_and_weekly(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(app, 'TrayIcon', _QuietTray), \
+                patch.object(app.AppSettings, 'load', return_value=app.AppSettings(codex_home=directory)), \
+                patch.object(app, 'history_path_for_codex_home', return_value=Path(directory) / 'empty-history.json'):
+            try:
+                counter = app.UsageApp()
+            except app.tk.TclError as exc:
+                self.skipTest(f'Tk display unavailable: {exc}')
+            callback_errors = []
+            counter.root.report_callback_exception = lambda _type, value, _trace: callback_errors.append(value)
+            try:
+                counter.root.withdraw()
+                counter.open_statistics()
+                self.assertIsNotNone(counter.stats_live_card_data.get('timestamp'))
+                counter.set_stats_daily()
+                counter.set_stats_weekly()
+                counter.set_stats_hourly()
+                counter.root.update_idletasks()
+                self.assertEqual(callback_errors, [])
+            finally:
+                counter.close_statistics()
+                counter.root.destroy()
+
+
 class UsageHistoryHourlyTests(unittest.TestCase):
     def test_hourly_collapses_by_local_hour_with_non_whole_hour_offset(self):
         # UTC+05:30: 99000/101000 are 03:30/04:03 UTC, both inside the 09:xx local hour.
@@ -106,8 +153,10 @@ class TelemetryTests(unittest.TestCase):
         self.assertLess(series[1]["token_rate_per_minute"], series[0]["token_rate_per_minute"])
 
     def test_model_labels(self):
-        for family in ('astra', 'sol', 'terra', 'luna'):
-            self.assertEqual(app.format_prominent_context('gpt-6-' + family, 'high'), family.upper() + ' · HIGH')
+        for family in ('astra', 'sol', 'luna'):
+            self.assertEqual(app.format_prominent_context('gpt-6-' + family, 'high'), 'GPT-6 ' + family.upper() + ' · HIGH')
+        for family in ('sol', 'terra', 'luna'):
+            self.assertEqual(app.format_prominent_context('gpt-5.6-' + family, 'high'), 'GPT-5.6 ' + family.upper() + ' · HIGH')
         self.assertEqual(app.format_prominent_context('astra', 'ultra'), 'ASTRA · ULTRA')
         self.assertEqual(app.format_prominent_context('custom-model', None), 'CUSTOM-MODEL')
 
@@ -115,7 +164,17 @@ class TelemetryTests(unittest.TestCase):
         for value in ('NaN', 'Infinity', '-Infinity', float('nan'), 10 ** 400):
             self.assertIsNone(app.number(value))
         self.assertIsNone(app.parse_timestamp(float('inf')))
+        self.assertIsNone(app.parse_timestamp(1e308))
         self.assertEqual(app.number('12.5'), 12.5)
+
+    def test_non_object_settings_fall_back_to_defaults(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / 'settings.json'
+            with patch.object(app, 'CONFIG_FILE', settings_path):
+                for value in ('null', '[]', '"invalid"'):
+                    with self.subTest(value=value):
+                        settings_path.write_text(value, encoding='utf-8')
+                        self.assertEqual(app.AppSettings.load(), app.AppSettings())
 
     def test_astra_and_malformed_events(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -136,6 +195,77 @@ class TelemetryTests(unittest.TestCase):
             self.assertEqual(result.reasoning_effort, 'ultra')
             self.assertEqual(result.used_percent, 12)
             self.assertEqual(result.five_hour_used_percent, 34)
+
+    def test_new_model_context_does_not_make_old_allowances_live(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'session.jsonl'
+            events = [
+                _session_event(100, 12, 34),
+                {'timestamp': 900, 'type': 'turn_context', 'payload': {'model': 'gpt-6-sol', 'effort': 'max'}},
+            ]
+            path.write_text('\n'.join(map(json.dumps, events)), encoding='utf-8')
+            reader = app.CodexTelemetryReader()
+            with patch.object(app.time, 'time', return_value=1000):
+                result = reader._read_file(path, 900)
+                self.assertTrue(result.is_stale)
+            self.assertEqual(result.timestamp, 100)
+            self.assertEqual(result.context_timestamp, 900)
+            self.assertEqual(result.model, 'gpt-6-sol')
+
+    def test_context_only_session_updates_model_without_freshening_usage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            reader = app.CodexTelemetryReader()
+            reader.sessions_dir = Path(directory)
+            (reader.sessions_dir / 'allowance.jsonl').write_text(json.dumps(_session_event(100, 12, 34)), encoding='utf-8')
+            (reader.sessions_dir / 'context.jsonl').write_text(
+                json.dumps({'timestamp': 900, 'type': 'turn_context', 'payload': {'model': 'gpt-6-luna', 'effort': 'high'}}),
+                encoding='utf-8',
+            )
+            with patch.object(app.time, 'time', return_value=1000):
+                result = reader.read()
+                self.assertTrue(result.is_stale)
+            self.assertEqual(result.timestamp, 100)
+            self.assertEqual(result.context_timestamp, 900)
+            self.assertEqual(result.model, 'gpt-6-luna')
+            self.assertEqual(result.reasoning_effort, 'high')
+            self.assertEqual(result.used_percent, 12)
+
+    def test_newer_non_codex_limit_does_not_replace_core_allowance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            reader = app.CodexTelemetryReader()
+            reader.sessions_dir = Path(directory)
+            core = _session_event(100, 12, 34)
+            core['payload']['rate_limits']['limit_id'] = 'codex'
+            premium = _session_event(200, 99, 99)
+            premium['payload']['rate_limits']['limit_id'] = 'premium'
+            path = reader.sessions_dir / 'session.jsonl'
+            path.write_text('\n'.join(map(json.dumps, (core, premium))), encoding='utf-8')
+            result = reader.read()
+            self.assertEqual(result.timestamp, 100)
+            self.assertEqual(result.used_percent, 12)
+            self.assertEqual(result.five_hour_used_percent, 34)
+
+    def test_refresh_worker_hands_result_to_main_thread_without_tk_call(self):
+        counter = app.UsageApp.__new__(app.UsageApp)
+        counter.refresh_in_flight = False
+        counter.refresh_button = Mock()
+        counter.root = Mock()
+        counter.reader = Mock()
+        result = app.UsageSnapshot(used_percent=12)
+        counter.reader.read.return_value = result
+        counter._refresh_results = app.queue.Queue()
+        with patch.object(app.threading, 'Thread') as thread_type:
+            counter.refresh_async()
+            worker = thread_type.call_args.kwargs['target']
+            worker()
+            thread_type.return_value.start.assert_called_once()
+        counter.root.after.assert_not_called()
+        counter.tray = Mock()
+        counter._finish_refresh = Mock()
+        counter.root.winfo_exists.return_value = True
+        counter._poll_tray()
+        counter._finish_refresh.assert_called_once_with(result)
+        counter.root.after.assert_called_once_with(100, counter._poll_tray)
 
     def test_discovery_keeps_newest_48_and_skips_deleted_files(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -327,7 +457,6 @@ class HistoryIsolationTests(unittest.TestCase):
                 default_path = app.history_path_for_codex_home(Path.home() / '.codex')
                 chatgpt_path = app.history_path_for_codex_home(chatgpt)
                 default_history = app.UsageHistory(default_path)
-                chatgpt_history = app.UsageHistory(chatgpt_path)
                 with patch.object(app.time, 'time', return_value=10_000.0):
                     default_history.record(app.UsageSnapshot(
                         used_percent=10.0, window_minutes=10080, resets_at=100_000.0, timestamp=9_999.0))

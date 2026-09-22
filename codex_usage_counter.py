@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes as wintypes
+import faulthandler
 from bisect import bisect_left, bisect_right
 import json
 import hashlib
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import webbrowser
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -35,6 +37,7 @@ REFRESH_SECONDS = 120
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "CodexUsageCounter"
 CONFIG_FILE = CONFIG_DIR / "settings.json"
 HISTORY_FILE = CONFIG_DIR / "usage_history.json"
+ERROR_LOG_FILE = CONFIG_DIR / "errors.log"
 HISTORY_RETENTION_DAYS = 30
 HISTORY_MAX_POINTS = 60000
 ACTIVE_SIGNAL_MAX_AGE_SECONDS = 10 * 60
@@ -73,6 +76,37 @@ COLORS = {
     "amber": "#f5c779",
     "cyan": "#62e6ef",
 }
+
+
+_fault_log_handle: Optional[Any] = None
+
+
+def _log_exception(context: str, error: Optional[tuple[Any, Any, Any]] = None) -> None:
+    """Retain a traceback when the windowed executable has no console."""
+
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        with ERROR_LOG_FILE.open("a", encoding="utf-8") as handle:
+            print(f"\n{datetime.now(timezone.utc).isoformat()} {context}", file=handle)
+            traceback.print_exception(*(error or sys.exc_info()), file=handle)
+    except OSError:
+        pass
+
+
+def _install_error_logging() -> None:
+    global _fault_log_handle
+
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        _fault_log_handle = ERROR_LOG_FILE.open("a", encoding="utf-8")
+        faulthandler.enable(file=_fault_log_handle, all_threads=True)
+    except (OSError, RuntimeError, ValueError):
+        pass
+
+    def thread_exception(args: threading.ExceptHookArgs) -> None:
+        _log_exception(f"Thread {args.thread.name}", (args.exc_type, args.exc_value, args.exc_traceback))
+
+    threading.excepthook = thread_exception
 
 
 def asset_path(name: str) -> Path:
@@ -193,10 +227,13 @@ def format_prominent_context(model: Any, effort: Any) -> str:
     model_name: Optional[str] = None
     if raw_model:
         lowered = raw_model.lower()
-        for family in ("astra", "sol", "terra", "luna"):
-            if lowered == family or lowered.endswith(f"-{family}"):
-                model_name = family.upper()
-                break
+        families = ("astra", "sol", "terra", "luna")
+        if lowered in families:
+            model_name = lowered.upper()
+        elif lowered.startswith("gpt-"):
+            generation, _, family = lowered.rpartition("-")
+            if family in families:
+                model_name = f"{generation.upper()} {family.upper()}"
         if model_name is None:
             model_name = raw_model.upper()
     effort_name = raw_effort.replace("_", " ").replace("-", " ").upper() if raw_effort else None
@@ -205,7 +242,14 @@ def format_prominent_context(model: Any, effort: Any) -> str:
 
 def parse_timestamp(value: Any) -> Optional[float]:
     if isinstance(value, (int, float)):
-        return number(value)
+        parsed = number(value)
+        if parsed is None:
+            return None
+        try:
+            datetime.fromtimestamp(parsed, tz=timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+        return parsed
     if not isinstance(value, str):
         return None
     try:
@@ -304,6 +348,8 @@ class AppSettings:
         try:
             payload = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError):
+            return cls()
+        if not isinstance(payload, dict):
             return cls()
         display_mode = payload.get("display_mode")
         if display_mode not in ("used", "remaining"):
@@ -1019,6 +1065,7 @@ class UsageSnapshot:
     context_window: Optional[float] = None
     model: Optional[str] = None
     reasoning_effort: Optional[str] = None
+    context_timestamp: Optional[float] = None
     error: Optional[str] = None
 
     @property
@@ -1120,10 +1167,11 @@ class CodexTelemetryReader:
             return None
         limits = payload.get("rate_limits")
         if isinstance(limits, dict):
-            return limits
+            return limits if limits.get("limit_id") in (None, "codex") else None
         info = payload.get("info")
         if isinstance(info, dict) and isinstance(info.get("rate_limits"), dict):
-            return info["rate_limits"]
+            limits = info["rate_limits"]
+            return limits if limits.get("limit_id") in (None, "codex") else None
         return None
 
     @staticmethod
@@ -1317,7 +1365,7 @@ class CodexTelemetryReader:
         latest_token_values: dict[str, Optional[float]] = {}
         latest_model = fallback_snapshot.model if fallback_snapshot is not None else None
         latest_effort = fallback_snapshot.reasoning_effort if fallback_snapshot is not None else None
-        latest_context_timestamp = 0.0
+        latest_context_timestamp = (fallback_snapshot.context_timestamp or 0.0) if fallback_snapshot is not None else 0.0
         for line in self._tail_lines(path):
             contains_limits = '"rate_limits"' in line
             contains_context = any(key in line for key in ('"model"', '"reasoning_effort"', '"effort"'))
@@ -1388,6 +1436,7 @@ class CodexTelemetryReader:
                 context_window=token_values.get("context_window"),
                 model=latest_model,
                 reasoning_effort=latest_effort,
+                context_timestamp=latest_context_timestamp or None,
             )
             if latest is None or timestamp > (latest.timestamp or 0):
                 latest = snapshot
@@ -1400,12 +1449,14 @@ class CodexTelemetryReader:
             latest_context_timestamp = max(latest_context_timestamp, context_timestamp)
         if latest is None:
             latest = fallback_snapshot
+        if latest is None and (latest_model is not None or latest_effort is not None):
+            latest = UsageSnapshot(source_path=str(path))
         if latest is not None and (latest_model is not None or latest_effort is not None):
             latest = replace(
                 latest,
-                timestamp=max(latest.timestamp or 0, latest_context_timestamp) or latest.timestamp,
                 model=latest_model or latest.model,
                 reasoning_effort=latest_effort or latest.reasoning_effort,
+                context_timestamp=latest_context_timestamp or latest.context_timestamp,
             )
         return latest
 
@@ -1414,6 +1465,7 @@ class CodexTelemetryReader:
             return UsageSnapshot(error="Codex session telemetry is not available yet")
 
         latest: Optional[tuple[float, UsageSnapshot]] = None
+        latest_context: Optional[tuple[float, UsageSnapshot]] = None
         next_cache: dict[str, tuple[int, int, Optional[UsageSnapshot]]] = {}
         # Discovery already statted each selected candidate, so the refresh reuses
         # those signatures for cache hits instead of statting the files again.
@@ -1424,7 +1476,8 @@ class CodexTelemetryReader:
             if cached is not None and cached[:2] == signature:
                 snapshot = cached[2]
             else:
-                snapshot = self._read_file(path, metadata.st_mtime, cached[2] if cached is not None else None)
+                fallback = cached[2] if cached is not None and metadata.st_size > cached[1] else None
+                snapshot = self._read_file(path, metadata.st_mtime, fallback)
                 if (
                     cached is not None
                     and metadata.st_size > cached[1]
@@ -1436,6 +1489,9 @@ class CodexTelemetryReader:
             if snapshot is not None and snapshot.timestamp is not None:
                 if latest is None or snapshot.timestamp > latest[0]:
                     latest = (snapshot.timestamp, snapshot)
+            if snapshot is not None and snapshot.context_timestamp is not None:
+                if latest_context is None or snapshot.context_timestamp > latest_context[0]:
+                    latest_context = (snapshot.context_timestamp, snapshot)
         self._file_cache = next_cache
         self._capture_watch_state(next_cache)
 
@@ -1480,7 +1536,7 @@ class CodexTelemetryReader:
                     )
                 )
                 if candidate_timestamp < previous_timestamp:
-                    return previous
+                    candidate = previous
                 if (
                     same_window
                     and previous.used_percent is not None
@@ -1512,9 +1568,25 @@ class CodexTelemetryReader:
                         five_hour_window_minutes=previous.five_hour_window_minutes,
                         five_hour_resets_at=previous.five_hour_resets_at,
                     )
+            if latest_context is not None and latest_context[0] > (candidate.context_timestamp or 0):
+                context = latest_context[1]
+                candidate = replace(
+                    candidate,
+                    model=context.model or candidate.model,
+                    reasoning_effort=context.reasoning_effort or candidate.reasoning_effort,
+                    context_timestamp=latest_context[0],
+                )
             self._latest_snapshot = candidate
             return candidate
         if self._latest_snapshot is not None:
+            if latest_context is not None and latest_context[0] > (self._latest_snapshot.context_timestamp or 0):
+                context = latest_context[1]
+                self._latest_snapshot = replace(
+                    self._latest_snapshot,
+                    model=context.model or self._latest_snapshot.model,
+                    reasoning_effort=context.reasoning_effort or self._latest_snapshot.reasoning_effort,
+                    context_timestamp=latest_context[0],
+                )
             return self._latest_snapshot
         return UsageSnapshot(error="Open Codex once to populate the local usage signal")
 
@@ -1675,25 +1747,29 @@ class TrayIcon:
         self._taskbar_created_message = _user32.RegisterWindowMessageW("TaskbarCreated")
 
         def wnd_proc(hwnd: int, msg: int, wparam: int, lparam: int) -> int:
-            if msg == self._taskbar_created_message:
-                self._add_icon(self._tooltip)
-                return 0
-            if msg == self._callback_message:
-                event = int(lparam)
-                if event in (0x0202, 0x0203):  # left up / double click
-                    self._ui_actions.put(("show", None))
-                elif event in (0x0205, 0x007B):  # right up / context menu
-                    point = _POINT()
-                    _user32.GetCursorPos(ctypes.byref(point))
-                    self._ui_actions.put(("menu", (point.x, point.y)))
-                return 0
-            if msg == 0x0010:  # WM_CLOSE
-                self._delete_icon()
-                _user32.DestroyWindow(hwnd)
-                return 0
-            if msg == 0x0002:  # WM_DESTROY
-                _user32.PostQuitMessage(0)
-                return 0
+            try:
+                if msg == self._taskbar_created_message:
+                    self._add_icon(self._tooltip)
+                    return 0
+                if msg == self._callback_message:
+                    event = int(lparam)
+                    if event in (0x0202, 0x0203):  # left up / double click
+                        self._ui_actions.put(("show", None))
+                    elif event in (0x0205, 0x007B):  # right up / context menu
+                        point = _POINT()
+                        _user32.GetCursorPos(ctypes.byref(point))
+                        self._ui_actions.put(("menu", (point.x, point.y)))
+                    return 0
+                if msg == 0x0010:  # WM_CLOSE
+                    self._delete_icon()
+                    _user32.DestroyWindow(hwnd)
+                    return 0
+                if msg == 0x0002:  # WM_DESTROY
+                    _user32.PostQuitMessage(0)
+                    return 0
+            except Exception:
+                # Exceptions cannot safely escape a ctypes callback into Windows.
+                _log_exception("Tray window callback")
             return int(_user32.DefWindowProcW(hwnd, msg, wparam, lparam))
 
         self._wnd_proc = _WNDPROC(wnd_proc)
@@ -1942,6 +2018,9 @@ class TrayMilestonePopup:
 class UsageApp:
     def __init__(self) -> None:
         self.root = tk.Tk()
+        self.root.report_callback_exception = (
+            lambda error_type, value, trace: _log_exception("Tk callback", (error_type, value, trace))
+        )
         self.settings = AppSettings.load()
         self.root.title("Codex Usage Counter")
         self.root.configure(bg=COLORS["ink"])
@@ -1963,6 +2042,7 @@ class UsageApp:
         self.last_alert_buckets: dict[str, int] = {}
         self.last_alert_windows: dict[str, tuple[float, Optional[float], float]] = {}
         self.refresh_in_flight = False
+        self._refresh_results: queue.Queue[UsageSnapshot] = queue.Queue()
         self.refresh_after_id: Optional[str] = None
         self.icon_image: Optional[tk.PhotoImage] = None
         self.tray_icon_percent: Optional[int] = None
@@ -2389,8 +2469,10 @@ class UsageApp:
 
     def _refresh_countdown(self) -> None:
         if self.root.winfo_exists():
-            self._draw()
-            self.root.after(30000, self._refresh_countdown)
+            try:
+                self._draw()
+            finally:
+                self.root.after(30000, self._refresh_countdown)
 
     def _poll_show_request(self) -> None:
         if not self.root.winfo_exists():
@@ -2407,9 +2489,11 @@ class UsageApp:
     def _watch_local_signal(self) -> None:
         if not self.root.winfo_exists():
             return
-        if self.reader.local_signal_changed():
-            self.refresh_async()
-        self.root.after(SIGNAL_WATCH_INTERVAL_MS, self._watch_local_signal)
+        try:
+            if self.reader.local_signal_changed():
+                self.refresh_async()
+        finally:
+            self.root.after(SIGNAL_WATCH_INTERVAL_MS, self._watch_local_signal)
 
     def _schedule_next_refresh(self) -> None:
         """Schedule the next automatic usage, rate, and ETA read after this one completes."""
@@ -2432,22 +2516,37 @@ class UsageApp:
                 result = self.reader.read()
             except Exception:
                 # Keep the polling loop alive if a session file changes mid-read.
+                _log_exception("Telemetry read")
                 result = UsageSnapshot(error="Local usage read failed; will retry")
-            self.root.after(0, lambda: self._finish_refresh(result))
+            # Tk belongs to the main thread. The tray poll delivers this result.
+            self._refresh_results.put(result)
 
-        threading.Thread(target=worker, name="codex-usage-reader", daemon=True).start()
+        try:
+            threading.Thread(target=worker, name="codex-usage-reader", daemon=True).start()
+        except RuntimeError:
+            _log_exception("Starting telemetry reader")
+            self._refresh_results.put(UsageSnapshot(error="Local usage read failed; will retry"))
 
     def _finish_refresh(self, result: UsageSnapshot) -> None:
         self.refresh_in_flight = False
         self.last_checked_at = time.time()
-        self.refresh_button.configure(state="normal", text="Refresh now")
-        self._maybe_show_milestone(result)
-        self.history.record(result)
-        self.snapshot = result
-        self._draw()
-        if self.stats_window is not None:
-            self._render_statistics()
-        self._schedule_next_refresh()
+        try:
+            self.refresh_button.configure(state="normal", text="Refresh now")
+            self._maybe_show_milestone(result)
+            self.history.record(result)
+            self.snapshot = result
+            self._draw()
+            if self.stats_window is not None:
+                self._render_statistics()
+        except Exception:
+            _log_exception("Finishing telemetry refresh")
+            self.snapshot = UsageSnapshot(error="Local usage refresh failed; will retry")
+            try:
+                self._draw()
+            except Exception:
+                _log_exception("Drawing refresh error")
+        finally:
+            self._schedule_next_refresh()
 
     def refresh_now(self) -> None:
         """Read immediately, independently of the two-minute polling timer."""
@@ -2495,9 +2594,21 @@ class UsageApp:
                 self._play_sound_alert()
 
     def _poll_tray(self) -> None:
-        self.tray.poll_actions()
-        if self.root.winfo_exists():
-            self.root.after(100, self._poll_tray)
+        try:
+            self.tray.poll_actions()
+            if not self.root.winfo_exists():
+                return
+            try:
+                result = self._refresh_results.get_nowait()
+            except queue.Empty:
+                return
+            self._finish_refresh(result)
+        finally:
+            try:
+                if self.root.winfo_exists():
+                    self.root.after(100, self._poll_tray)
+            except tk.TclError:
+                pass
 
     def _tray_action(self, action: str, value: Any) -> None:
         if action == "show":
@@ -4107,7 +4218,7 @@ class UsageApp:
             resets_field="five_hour_resets_at",
         )
         self.stats_live_card_data = {
-            "timestamp": number(latest_point.get("timestamp")) if latest_point else end,
+            "timestamp": number(latest_point.get("timestamp")) if latest_point else end_time,
             "five_hour_used_percent": five_hour_current,
             "five_hour_resets_at": five_hour_reset,
             "used_percent": current,
@@ -4884,6 +4995,7 @@ class UsageApp:
 
 
 def main() -> None:
+    _install_error_logging()
     if not acquire_single_instance():
         return
     app = UsageApp()
@@ -4891,4 +5003,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        _log_exception("Uncaught application error")
+        raise

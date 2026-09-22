@@ -7,7 +7,7 @@ A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, rese
 ## What it does
 
 - Shows independent 5-hour and weekly Codex allowance percentages, reset countdowns, pace, and ETA.
-- Shows the currently tracked model and reasoning effort prominently on the main counter, including **ASTRA**, **SOL**, **TERRA**, and **LUNA**, such as **TRACKING · ASTRA · HIGH**.
+- Shows the currently tracked model and reasoning effort prominently on the main counter, including **GPT-6 ASTRA**, **GPT-6 SOL**, and **GPT-6 LUNA**. It keeps GPT-5.6 Sol, Terra, and Luna distinct, such as **TRACKING · GPT-6 SOL · HIGH**.
 - Tracks current-task input, cached-input, output, reasoning, total, and last-response token counts from local Codex aggregate telemetry.
 - Refreshes within about a second when an already-discovered active Codex session file changes; configurable polling remains the fallback.
 - Shows timestamped model and reasoning-effort changes on the detailed Hourly chart with thin, subtle amber model markers and thin, subtle dashed-coral effort markers.
@@ -55,9 +55,11 @@ The session source is selected in this order: an explicit `codex_home` path in `
 
 Statistics history is kept per source so DeepSeek and ChatGPT samples cannot mix. The canonical default `%USERPROFILE%\.codex` source keeps using the existing `usage_history.json` (preserved, never migrated or deleted); every other source stores its samples in a separate `usage_history-<digest>.json` named by a hash of the resolved, case-normalized home path. Settings remain global.
 
-The reader identifies allowance windows by their reported duration: 300 minutes for the 5-hour limit and 10,080 minutes for the weekly limit. It does not assume `primary` always means weekly, so both windows remain correct if their field positions change. Historical weekly samples remain available; the 5-hour history begins when Codex first reports that window and is not fabricated for earlier periods.
+The reader uses the `codex` rate-limit bucket when telemetry provides a bucket ID and identifies allowance windows by their reported duration: 300 minutes for the 5-hour limit and 10,080 minutes for the weekly limit. It does not assume `primary` always means weekly, so both windows remain correct if their field positions change. Historical weekly samples remain available; the 5-hour history begins when Codex first reports that window and is not fabricated for earlier periods.
 
-It does not read `auth.json`, API keys, cookies, browser profiles, or store conversation content. The only extra session context it retains is a short model identifier and reasoning-effort value, timestamped with a local usage sample. Token totals are scoped to the currently active local Codex task. Token-to-percentage statistics are observed relationships, not fixed conversions: model behavior, caching, reasoning, concurrent tasks, and delayed allowance reporting can change them. The usage dashboard link opens the official dashboard for the authoritative view. Because the counter is based on local session telemetry, it can show a stale signal until a newer Codex event is written; **Refresh now** forces an immediate local read.
+It does not read `auth.json`, API keys, cookies, browser profiles, or store conversation content. The only extra session context it retains is a short model identifier and reasoning-effort value. Model context can update separately from allowance readings; a newer model event never makes old usage percentages appear fresh or adds a false point to history. Token totals are scoped to the currently active local Codex task. Token-to-percentage statistics are observed relationships, not fixed conversions: model behavior, caching, reasoning, concurrent tasks, and delayed allowance reporting can change them. The usage dashboard link opens the official dashboard for the authoritative view. Because the counter is based on local session telemetry, it can show a stale signal until a newer allowance event is written; **Refresh now** forces an immediate local read.
+
+If the app closes unexpectedly, `%APPDATA%\CodexUsageCounter\errors.log` records Python callback and worker tracebacks plus native fault traces where available. The log does not record conversation text or credentials.
 
 Closing the window hides it to the tray. Use the tray menu’s **Quit** command to exit.
 
