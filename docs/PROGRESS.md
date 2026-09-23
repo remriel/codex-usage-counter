@@ -4,11 +4,13 @@
 
 Update Codex Usage Counter for GPT-6 model identification, fix background refresh crashes and stale usage, install the verified build, remove older executable copies, and synchronize GitHub.
 
-Progress: [█████████░] 90% — source merged; release assets being published.
+Progress: [██████████] 100% — source merged and v1.1.27 published.
 
 ## Current state
 
 - GitHub PR #37 is merged into `main` at `2328c35`.
+- Release [v1.1.27](https://github.com/remriel/codex-usage-counter/releases/tag/v1.1.27) is published from source commit `a32315b`.
+- Published asset SHA-256 values: executable `BA93F3449B79DA26B1F2E1692C8B82C22E2C1F13634632DED6BC05229AB11857`; source ZIP `342C2D5178AB277A5C1304FD32C11D62CE15458D712B59603C29CFD72FF176A5`.
 - The corrected executable is installed at `%LOCALAPPDATA%\Programs\CodexUsageCounter\CodexUsageCounter.exe`, SHA-256 `BA93F3449B79DA26B1F2E1692C8B82C22E2C1F13634632DED6BC05229AB11857`. The startup shortcut targets this path.
 - Settings select `C:\Users\Gev\.codex-chatgpt`; preserve settings and both history files.
 - Current source suite: `python -m pytest -q` passes **39 tests, 30 subtests**; `pyflakes` and `py_compile` pass.
@@ -36,6 +38,6 @@ Progress: [█████████░] 90% — source merged; release assets
 - The corrected packaged build launched from the stable install path, both one-file processes remained responsive, and `%APPDATA%\CodexUsageCounter\errors.log` did not grow during the installation smoke. The old logged exceptions remain for diagnosis.
 - Keep temporary lint dependencies outside the repository: placing `pyflakes` under ignored `work/` made an unrestricted `pytest` run discover the package's own tests. The folder was moved to the current task's scratch directory, and the repository suite again passed 39 tests and 30 subtests.
 
-## Next steps
+## Completion
 
-Publish v1.1.27 with the verified executable and source archive, then record release completion in this file.
+The corrected executable is installed and available in the current task's `outputs` folder. Four older executable copies were moved to the Recycle Bin; settings and history were preserved. The source PR is merged, the release assets and tag were verified, and no further work remains for this request.
