@@ -1,36 +1,39 @@
-# Usage Counter Correctness, Performance, and Packaging Fixes
+# Current progress
 
 ## Objective
 
-Fix source-selection, history-isolation, hourly-bucketing, and refresh-performance issues on branch `fix/usage-counter-correctness-performance`, and make the Windows build work with Python 3.14's zip-packaged Tcl/Tk.
+Update Codex Usage Counter for GPT-6 model identification, fix background refresh crashes and stale usage, install the verified build, remove older executable copies, and synchronize GitHub.
 
-## Implementation
+## Current state
 
-- Source selection: an explicit `codex_home` from `settings.json` always wins (used as-is even when missing), then an existing `~/.codex-chatgpt`, then `CODEX_HOME`, then `~/.codex`. Single-profile behavior is unchanged.
-- Per-source history isolation: canonical `~/.codex` keeps the legacy `usage_history.json` (preserved, never migrated or deleted); every other source uses `usage_history-<digest>.json` where the digest is the first 16 hex chars of `sha256(os.path.normcase(resolved_home))`, so DeepSeek and ChatGPT samples cannot mix.
-- Hourly bucketing: `UsageHistory.hourly` collapses samples on local-hour boundaries via `datetime.fromtimestamp(...).astimezone()` instead of `timestamp // 3600`, fixing UTC+05:30 offsets and DST fall-back duplicates.
-- Refresh performance: `CodexTelemetryReader._candidate_files()` returns `(Path, os.stat_result)` pairs so cache-hit refreshes reuse the discovery stat instead of statting each selected candidate again; newest-48 ranking, tie order, unreadable-file skips, and signature-based invalidation are unchanged.
-- Packaging: `build.ps1` gained `-SkipAssetGeneration` and calls `scripts/prepare_tk_data.py`, which stages zip-packaged Tcl/Tk into `_tcl_data`/`_tk_data` (Tcl/Tk 9 on Python 3.14 Windows) that PyInstaller's hooks miss. `scripts/test_prepare_tk_data.py` proves archive-controlled prefixes cannot extract or delete outside `<build_dir>/tk_staging`.
+- Working branch: `fix/gpt6-counter-stability`, created from clean `main` at `1b6e6f2` (`v1.1.26` release record).
+- The corrected executable is installed at `%LOCALAPPDATA%\Programs\CodexUsageCounter\CodexUsageCounter.exe`, SHA-256 `BA93F3449B79DA26B1F2E1692C8B82C22E2C1F13634632DED6BC05229AB11857`. The startup shortcut targets this path.
+- Settings select `C:\Users\Gev\.codex-chatgpt`; preserve settings and both history files.
+- Current source suite: `python -m pytest -q` passes **39 tests, 30 subtests**; `pyflakes` and `py_compile` pass.
 
-## Tests
+## Findings
 
-- Full suite: `python -m pytest -q` → **33 passed, 27 subtests passed** (source selection, history isolation, local-hour bucketing, stat/cache invalidation, extraction safety, plus existing regressions).
-- `git diff --check` clean; `python -m py_compile` passed.
+- Official OpenAI documentation lists `gpt-6-astra`, `gpt-6-sol`, and `gpt-6-luna`. Current label formatting hides the version, making GPT-6 and GPT-5.6 Sol/Luna indistinguishable.
+- Live local telemetry uses `limit_id=codex` with 300-minute and 10,080-minute windows. Some `premium` events contain no allowance windows; existing reader skips them.
+- `_read_file` advances the allowance snapshot timestamp to the latest model-context event. A session with newer context but older limits can therefore show stale percentages as LIVE and write incorrect history points. Observed on the user's current profile.
+- `refresh_async` calls `root.after` from a worker thread. This is unsafe around Tk shutdown and is a plausible background crash path. The windowed build has no persistent exception trace.
+- No matching Windows Application or WER crash report was found. The user reports exits during normal background use; the old executable was launched for comparison.
+- The interim packaged build logged a concrete `NameError` in `_render_statistics` when Hourly Statistics had no recent points: `end` was undefined. The renderer now uses `end_time`; a real Tk regression covers empty Hourly, Daily, and Weekly views.
+- Four older executable copies were identified in archived July and September project folders; all four were moved to the Recycle Bin after the corrected stable install was verified. Settings, history, and the source repositories remain intact.
+- A fresh executable inventory found only the verified build in the repository `dist` folder and at the stable install path; both hashes match. A matching deliverable copy is in the current task's `outputs` folder.
 
-## Build and deployment
+## Implementation and verification
 
-- Rebuilt `dist\CodexUsageCounter.exe` with PyInstaller through `build.ps1` (`-SkipAssetGeneration`); SHA-256 `7F643EAB1480834F79AAE4B79A37406D0963429EC2FF588149D705F06FCBED9F`.
-- Replaced the previous stable executable at `%LOCALAPPDATA%\Programs\CodexUsageCounter` with the new build; the installed hash matches and the old executable was sent to the Recycle Bin.
-- Packaged smoke test showed a live title with both `5H` and `Week` values. The stable running process is using the ChatGPT profile and its hashed history file; the legacy `usage_history.json` remains unchanged.
-- Settings pinned to `C:\Users\Gev\.codex-chatgpt`; mixed legacy history preserved with backup at `%APPDATA%\CodexUsageCounter\backup-20260914-171835`.
-- The executable is not committed; `dist/`, `build/`, work logs, and regenerated assets stay out of git.
-
-## GitHub sync
-
-- PR #36 was merged into `main`; release commit `213cf210c20d741006eb1a81b73276d2e2cafc59` contains the verified source, tests, README, progress, `build.ps1`, and Tcl/Tk staging scripts.
-- Published [v1.1.26](https://github.com/remriel/codex-usage-counter/releases/tag/v1.1.26) with the Windows executable and matching source archive. GitHub asset digests are executable `sha256:7f643eab1480834f79aae4b79a37406d0963429ec2ff588149d705f06fcbed9f` and source `sha256:4d600a81886794a6229c5b050437e42f569c1cec5953673166bbd459d0364224`.
-- The prior installed executable, three stale Downloads copies, and the stale plugin output were sent to the Recycle Bin; the stable install and plugin output now match the v1.1.26 executable.
+- Allowance freshness now comes only from allowance events; context-only sessions can update the shown model independently. Non-`codex` limit buckets are ignored.
+- GPT-6 Astra/Sol/Luna labels include their generation, distinct from GPT-5.6 names.
+- Reader workers use a queue; Tk receives results on its own thread. Recurring refresh callbacks reschedule after recoverable errors. Exceptions and native faults are written to `%APPDATA%\CodexUsageCounter\errors.log`.
+- Malformed non-object settings and out-of-range numeric timestamps no longer cause startup/render failures.
+- Regression suite passes 39 tests and 30 subtests. `pyflakes` found and helped remove an existing unused test assignment; no undefined names remain. `git diff --check` and bytecode compilation pass.
+- Real Tk smoke passed with empty history across all three views and with 1,080 real history points while a hidden Statistics view received a background refresh; no callback errors.
+- The first packaged build launched but failed on the empty Hourly branch; it must be replaced. Do not reuse hash `81826C19...` for release.
+- The corrected packaged build launched from the stable install path, both one-file processes remained responsive, and `%APPDATA%\CodexUsageCounter\errors.log` did not grow during the installation smoke. The old logged exceptions remain for diagnosis.
+- Keep temporary lint dependencies outside the repository: placing `pyflakes` under ignored `work/` made an unrestricted `pytest` run discover the package's own tests. The folder was moved to the current task's scratch directory, and the repository suite again passed 39 tests and 30 subtests.
 
 ## Next steps
 
-- No release work remains. Future app changes should start from `main` and update this handoff after each verified build or release.
+Synchronize the source through a GitHub PR, publish v1.1.27 with the verified executable and source archive, then record release completion in this file.
