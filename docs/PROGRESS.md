@@ -12,7 +12,7 @@ Progress: [██████████] 100% — source merged and v1.1.27 pu
 - Release [v1.1.27](https://github.com/remriel/codex-usage-counter/releases/tag/v1.1.27) is published from source commit `a32315b`.
 - Published asset SHA-256 values: executable `BA93F3449B79DA26B1F2E1692C8B82C22E2C1F13634632DED6BC05229AB11857`; source ZIP `342C2D5178AB277A5C1304FD32C11D62CE15458D712B59603C29CFD72FF176A5`.
 - The corrected executable is installed at `%LOCALAPPDATA%\Programs\CodexUsageCounter\CodexUsageCounter.exe`, SHA-256 `BA93F3449B79DA26B1F2E1692C8B82C22E2C1F13634632DED6BC05229AB11857`. The startup shortcut targets this path.
-- Settings select `C:\Users\Gev\.codex-chatgpt`; preserve settings and both history files.
+- Settings select the current single-profile home `C:\Users\Gev\.codex`; settings and history remain preserved.
 - Current source suite: `python -m pytest -q` passes **39 tests, 30 subtests**; `pyflakes` and `py_compile` pass.
 
 ## Findings
@@ -24,6 +24,8 @@ Progress: [██████████] 100% — source merged and v1.1.27 pu
 - No matching Windows Application or WER crash report was found. The user reports exits during normal background use; the old executable was launched for comparison.
 - The interim packaged build logged a concrete `NameError` in `_render_statistics` when Hourly Statistics had no recent points: `end` was undefined. The renderer now uses `end_time`; a real Tk regression covers empty Hourly, Daily, and Weekly views.
 - Four older executable copies were identified in archived July and September project folders; all four were moved to the Recycle Bin after the corrected stable install was verified. Settings, history, and the source repositories remain intact.
+- After Codex migrated back to the standard single-profile home, the saved `codex_home` override still pointed at the inactive `.codex-chatgpt` folder. The override now points at `.codex`, whose telemetry is current; the counter was restarted and its live reader/history values were verified.
+- Three remaining previous-version source archives (v1.1.24, v1.1.25, and v1.1.26) were moved to the Recycle Bin. The v1.1.27 executable, source ZIP, installed app, settings, and history were retained.
 - A fresh executable inventory found only the verified build in the repository `dist` folder and at the stable install path; both hashes match. A matching deliverable copy is in the current task's `outputs` folder.
 
 ## Implementation and verification
@@ -40,4 +42,4 @@ Progress: [██████████] 100% — source merged and v1.1.27 pu
 
 ## Completion
 
-The corrected executable is installed and available in the current task's `outputs` folder. Four older executable copies were moved to the Recycle Bin; settings and history were preserved. The source PR is merged, the release assets and tag were verified, and no further work remains for this request.
+The corrected executable is installed, running from the stable install path, and available in the current task's `outputs` folder. Four older executable copies and three old source archives were moved to the Recycle Bin. The counter reads the active `.codex` profile, settings and history were preserved, and its latest source-specific history point matches the live allowance reader. The source PR is merged and the release assets and tag were verified.
