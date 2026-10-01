@@ -2,7 +2,7 @@
 
 Objective: Fix intermittent refresh stalls and quota mismatches, make refresh automatic and nearly real time, verify/install the Windows executable, and synchronize GitHub.
 
-Progress: [#########-] 95% — implementation, verification, build and installation complete; GitHub PR pending.
+Progress: [#########-] 100% — implementation, verification, build, installation and GitHub synchronization complete.
 
 ## Completed work
 
@@ -23,8 +23,8 @@ Progress: [#########-] 95% — implementation, verification, build and installat
 
 No implementation blocker. Codex can update its server-side usage before it writes the local event. Observed a one-point delay during active work; do not claim exact real-time server parity. No long-duration stability soak or foreground tray inspection performed.
 
-## Ordered next steps
+## Completion and next steps
 
-1. Commit source, regression tests and docs; push branch and open PR.
-2. Record PR URL and final completion status.
-3. Deliver executable and concise verification boundaries.
+Source commit `484a5bf` is pushed to `fix/realtime-refresh-sync`. PR: https://github.com/remriel/codex-usage-counter/pull/38. The verified executable is installed and copied to the task outputs directory. Settings were saved without the obsolete polling key, preserving display/source/startup/milestone preferences and 4,398 history points. Installed parent/child processes are responsive; persistent errors.log remains unchanged since September 22.
+
+No implementation work remains. PR merge and a public release are still pending; this task does not claim a published release. If a future report describes a stop, inspect errors.log and current telemetry timestamps before changing the polling interval. An extended stability soak remains useful for rare failures.
