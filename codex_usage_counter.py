@@ -904,8 +904,25 @@ class UsageHistory:
         sum_y = 0.0
         sum_x_squared = 0.0
         sum_xy = 0.0
+        reset_field = "five_hour_resets_at" if value_field == "five_hour_used_percent" else "resets_at"
+        previous_reset: Optional[float] = None
 
         for point in points:
+            point_reset = number(point.get(reset_field))
+            reset_changed = (
+                previous_reset is not None
+                and point_reset is not None
+                and abs(point_reset - previous_reset) > RESET_TIME_TOLERANCE_SECONDS
+            )
+            if reset_changed:
+                window.clear()
+                sum_x = 0.0
+                sum_y = 0.0
+                sum_x_squared = 0.0
+                sum_xy = 0.0
+                smoothed = None
+                segment += 1
+
             cutoff = point["timestamp"] - RATE_WINDOW_MINUTES * 60
             had_window = bool(window)
             while window and window[0][0]["timestamp"] < cutoff:
@@ -918,7 +935,20 @@ class UsageHistory:
                 smoothed = None
                 segment += 1
 
-            if window and float(point[value_field]) < float(window[-1][0][value_field]):
+            same_allowance_window = (
+                previous_reset is not None
+                and point_reset is not None
+                and abs(point_reset - previous_reset) <= RESET_TIME_TOLERANCE_SECONDS
+            )
+            # The same allowance window can receive corrected, lower readings.
+            # Those are not resets: keep the pace history continuous, and break
+            # the series only when the server reports a new reset boundary.
+            if (
+                window
+                and not reset_changed
+                and not same_allowance_window
+                and float(point[value_field]) < float(window[-1][0][value_field])
+            ):
                 window.clear()
                 sum_x = 0.0
                 sum_y = 0.0
@@ -934,6 +964,7 @@ class UsageHistory:
             sum_y += y
             sum_x_squared += x * x
             sum_xy += x * y
+            previous_reset = point_reset
 
             count = len(window)
             denominator = count * sum_x_squared - sum_x * sum_x
