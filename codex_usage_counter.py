@@ -33,7 +33,7 @@ except ImportError:
 
 
 USAGE_DASHBOARD_URL = "https://chatgpt.com/codex/settings/usage"
-REFRESH_SECONDS = 120
+REFRESH_SECONDS = 2
 CONFIG_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "CodexUsageCounter"
 CONFIG_FILE = CONFIG_DIR / "settings.json"
 HISTORY_FILE = CONFIG_DIR / "usage_history.json"
@@ -45,7 +45,8 @@ RATE_WINDOW_MINUTES = 45
 RATE_MIN_POINTS = 2
 RATE_MIN_SPAN_SECONDS = 60
 TOKEN_RATE_WINDOW_MINUTES = 5
-SIGNAL_WATCH_INTERVAL_MS = 1000
+SIGNAL_WATCH_INTERVAL_MS = 500
+SESSION_DISCOVERY_SECONDS = 30
 TRANSIENT_DROP_RECOVERY_MINUTES = 5
 RESET_TIME_TOLERANCE_SECONDS = 2
 STARTUP_SHORTCUT_NAME = "Codex Usage Counter.lnk"
@@ -340,7 +341,6 @@ class AppSettings:
     sound_alert: bool = False
     milestone_step: int = 10
     milestone_duration: int = 5
-    refresh_interval_seconds: int = 120
     codex_home: str = ""
 
     @classmethod
@@ -360,9 +360,6 @@ class AppSettings:
         milestone_duration = int(number(payload.get("milestone_duration")) or 5)
         if milestone_duration not in (1, 2, 5, 10):
             milestone_duration = 5
-        refresh_interval_seconds = int(number(payload.get("refresh_interval_seconds")) or REFRESH_SECONDS)
-        if refresh_interval_seconds not in (15, 30, 60, 120, 300, 600, 900):
-            refresh_interval_seconds = REFRESH_SECONDS
         codex_home = payload.get("codex_home")
         if not isinstance(codex_home, str):
             codex_home = ""
@@ -373,7 +370,6 @@ class AppSettings:
             sound_alert=bool(payload.get("sound_alert", False)),
             milestone_step=milestone_step,
             milestone_duration=milestone_duration,
-            refresh_interval_seconds=refresh_interval_seconds,
             codex_home=codex_home.strip(),
         )
 
@@ -389,7 +385,6 @@ class AppSettings:
                         "sound_alert": self.sound_alert,
                         "milestone_step": self.milestone_step,
                         "milestone_duration": self.milestone_duration,
-                        "refresh_interval_seconds": self.refresh_interval_seconds,
                         "codex_home": self.codex_home,
                     },
                     indent=2,
@@ -483,7 +478,7 @@ class UsageHistory:
 
     @classmethod
     def _sanitize(cls, points: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Remove stale-session dips without hiding a real allowance reset."""
+        """Validate and coalesce history while preserving newer quota corrections."""
 
         valid_points: list[dict[str, Any]] = []
         for item in points:
@@ -527,6 +522,7 @@ class UsageHistory:
             if cleaned and point["used_percent"] < cleaned[-1]["used_percent"]:
                 previous = cleaned[-1]
                 if cls._same_limit_window(previous, point):
+                    cleaned.append(point)
                     continue
                 if not cls._different_limit_window(previous, point):
                     deadline = point["timestamp"] + recovery_seconds
@@ -1134,6 +1130,8 @@ class CodexTelemetryReader:
         self._latest_snapshot: Optional[UsageSnapshot] = None
         self._watch_signatures: dict[str, tuple[int, int]] = {}
         self._watch_day_mtime_ns: Optional[int] = None
+        self._watch_day_path: Optional[Path] = None
+        self._last_discovery_at = float('-inf')
         self._full_context_scanned_paths: set[str] = set()
 
     @staticmethod
@@ -1255,6 +1253,8 @@ class CodexTelemetryReader:
                         event = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+                    if not isinstance(event, dict):
+                        continue
                     model, effort = self._event_context(event)
                     if model is None and effort is None:
                         continue
@@ -1305,8 +1305,18 @@ class CodexTelemetryReader:
 
     def _candidate_files(self) -> list[tuple[Path, os.stat_result]]:
         candidates: list[tuple[int, str, Path, os.stat_result]] = []
+        now = time.monotonic()
+        full_scan = now - self._last_discovery_at >= SESSION_DISCOVERY_SECONDS or not self._file_cache
         try:
-            for item in self.sessions_dir.rglob("*.jsonl"):
+            if full_scan:
+                paths = self.sessions_dir.rglob("*.jsonl")
+            else:
+                # Known active sessions plus newly-created files around midnight.
+                day = self._current_day_directory()
+                yesterday_date = datetime.now() - timedelta(days=1)
+                yesterday = self.sessions_dir / f"{yesterday_date.year:04d}" / f"{yesterday_date.month:02d}" / f"{yesterday_date.day:02d}"
+                paths = dict.fromkeys([*(Path(path) for path in self._file_cache), *day.glob("*.jsonl"), *yesterday.glob("*.jsonl")])
+            for item in paths:
                 try:
                     metadata = item.stat()
                     if not stat.S_ISREG(metadata.st_mode):
@@ -1320,6 +1330,8 @@ class CodexTelemetryReader:
                     heapq.heapreplace(candidates, entry)
         except OSError:
             pass
+        if full_scan:
+            self._last_discovery_at = now
         return [(entry[2], entry[3]) for entry in sorted(candidates, reverse=True)]
 
     def _current_day_directory(self) -> Path:
@@ -1329,16 +1341,21 @@ class CodexTelemetryReader:
     def _capture_watch_state(self, cache: dict[str, tuple[int, int, Optional[UsageSnapshot]]]) -> None:
         self._watch_signatures = {
             path: (entry[0], entry[1])
-            for path, entry in list(cache.items())[:8]
+            for path, entry in cache.items()
         }
+        self._watch_day_path = self._current_day_directory()
         try:
-            self._watch_day_mtime_ns = self._current_day_directory().stat().st_mtime_ns
+            self._watch_day_mtime_ns = self._watch_day_path.stat().st_mtime_ns
         except OSError:
             self._watch_day_mtime_ns = None
 
     def local_signal_changed(self) -> bool:
         """Cheaply detect active-session appends between scheduled full scans."""
 
+        if self._current_day_directory() != self._watch_day_path:
+            return True
+        if time.monotonic() - self._last_discovery_at >= SESSION_DISCOVERY_SECONDS:
+            return True
         for path_text, signature in self._watch_signatures.items():
             try:
                 metadata = Path(path_text).stat()
@@ -1524,50 +1541,9 @@ class CodexTelemetryReader:
             if previous is not None:
                 previous_timestamp = previous.timestamp or 0
                 candidate_timestamp = candidate.timestamp or 0
-                same_window = (
-                    previous.resets_at is not None
-                    and candidate.resets_at is not None
-                    and abs(previous.resets_at - candidate.resets_at) <= RESET_TIME_TOLERANCE_SECONDS
-                    and candidate_timestamp <= max(previous.resets_at, candidate.resets_at) + RESET_TIME_TOLERANCE_SECONDS
-                    and (
-                        previous.window_minutes is None
-                        or candidate.window_minutes is None
-                        or previous.window_minutes == candidate.window_minutes
-                    )
-                )
+                # Preserve ordering, but trust newer quota corrections even downward.
                 if candidate_timestamp < previous_timestamp:
                     candidate = previous
-                if (
-                    same_window
-                    and previous.used_percent is not None
-                    and candidate.used_percent is not None
-                    and candidate.used_percent < previous.used_percent
-                ):
-                    candidate = replace(
-                        candidate,
-                        used_percent=previous.used_percent,
-                        window_minutes=previous.window_minutes,
-                        resets_at=previous.resets_at,
-                    )
-                same_five_hour_window = (
-                    previous.five_hour_resets_at is not None
-                    and candidate.five_hour_resets_at is not None
-                    and abs(previous.five_hour_resets_at - candidate.five_hour_resets_at) <= RESET_TIME_TOLERANCE_SECONDS
-                    and candidate_timestamp
-                    <= max(previous.five_hour_resets_at, candidate.five_hour_resets_at) + RESET_TIME_TOLERANCE_SECONDS
-                )
-                if (
-                    same_five_hour_window
-                    and previous.five_hour_used_percent is not None
-                    and candidate.five_hour_used_percent is not None
-                    and candidate.five_hour_used_percent < previous.five_hour_used_percent
-                ):
-                    candidate = replace(
-                        candidate,
-                        five_hour_used_percent=previous.five_hour_used_percent,
-                        five_hour_window_minutes=previous.five_hour_window_minutes,
-                        five_hour_resets_at=previous.five_hour_resets_at,
-                    )
             if latest_context is not None and latest_context[0] > (candidate.context_timestamp or 0):
                 context = latest_context[1]
                 candidate = replace(
@@ -2344,7 +2320,9 @@ class UsageApp:
 
     def _draw(self) -> None:
         snapshot = self.snapshot
-        display_percent = self._display_percent(snapshot)
+        self._update_tray(snapshot)
+        if not self.root.winfo_viewable():
+            return
         self.canvas.delete("all")
 
         self._rounded_rect(16, 16, 54, 54, 12, COLORS["panel_raised"])
@@ -2449,9 +2427,11 @@ class UsageApp:
             footer_color = COLORS["muted"]
         self.canvas.create_text(20, 372, text=footer, anchor="w", fill=footer_color, font=("Segoe UI", 8))
 
+    def _update_tray(self, snapshot: UsageSnapshot) -> None:
+        display_percent = self._display_percent(snapshot)
         if display_percent is not None:
             tray_percent = int(round(clamp(display_percent, 0, 100)))
-            self._set_tray_icon(tray_percent)
+            self._set_tray_icon(None if snapshot.is_stale else tray_percent)
             five_hour_display = self._display_value(snapshot.five_hour_used_percent)
             weekly_display = self._display_value(snapshot.used_percent)
             five_hour_text = f"{five_hour_display:.0f}%" if five_hour_display is not None else "--"
@@ -2462,6 +2442,9 @@ class UsageApp:
             self._set_tray_icon(None)
             taskbar_label = "Codex Usage Counter"
             tray_tip = "Codex Usage Counter • open Codex to connect"
+        if snapshot.is_stale:
+            tray_tip += " · STALE local signal"
+            taskbar_label += " · STALE"
         self.root.title(taskbar_label)
         if tray_tip != self.last_tray_tooltip:
             self.tray.update_tooltip(tray_tip)
@@ -2501,15 +2484,15 @@ class UsageApp:
         if self.refresh_after_id is not None or not self.root.winfo_exists():
             return
         self.refresh_after_id = self.root.after(
-            self.settings.refresh_interval_seconds * 1000,
+            REFRESH_SECONDS * 1000,
             self._poll_refresh,
         )
 
     def refresh_async(self) -> None:
         if self.refresh_in_flight:
             return
-        self.refresh_in_flight = True
         self.refresh_button.configure(state="disabled", text="Reading…")
+        self.refresh_in_flight = True
 
         def worker() -> None:
             try:
@@ -2530,13 +2513,14 @@ class UsageApp:
     def _finish_refresh(self, result: UsageSnapshot) -> None:
         self.refresh_in_flight = False
         self.last_checked_at = time.time()
+        previous_snapshot = self.snapshot
         try:
             self.refresh_button.configure(state="normal", text="Refresh now")
             self._maybe_show_milestone(result)
             self.history.record(result)
             self.snapshot = result
             self._draw()
-            if self.stats_window is not None:
+            if self.stats_window is not None and self.stats_window.winfo_viewable() and result != previous_snapshot:
                 self._render_statistics()
         except Exception:
             _log_exception("Finishing telemetry refresh")
@@ -2549,7 +2533,7 @@ class UsageApp:
             self._schedule_next_refresh()
 
     def refresh_now(self) -> None:
-        """Read immediately, independently of the two-minute polling timer."""
+        """Read immediately, independently of the automatic polling timer."""
 
         self.refresh_async()
 
@@ -2595,7 +2579,10 @@ class UsageApp:
 
     def _poll_tray(self) -> None:
         try:
-            self.tray.poll_actions()
+            try:
+                self.tray.poll_actions()
+            except Exception:
+                _log_exception("Polling tray actions")
             if not self.root.winfo_exists():
                 return
             try:
@@ -2624,6 +2611,7 @@ class UsageApp:
         self.root.attributes("-topmost", self.settings.always_on_top)
         self.root.lift()
         self.root.focus_force()
+        self.root.after_idle(self._draw)
 
     def hide_to_tray(self) -> None:
         self.root.withdraw()
@@ -4845,16 +4833,6 @@ class UsageApp:
         step_var = tk.StringVar(value=f"{self.settings.milestone_step}%")
         duration_label = "second" if self.settings.milestone_duration == 1 else "seconds"
         duration_var = tk.StringVar(value=f"{self.settings.milestone_duration} {duration_label}")
-        refresh_options = {
-            15: "15 seconds",
-            30: "30 seconds",
-            60: "1 minute",
-            120: "2 minutes",
-            300: "5 minutes",
-            600: "10 minutes",
-            900: "15 minutes",
-        }
-        refresh_var = tk.StringVar(value=refresh_options[self.settings.refresh_interval_seconds])
         option_style = {
             "bg": COLORS["panel_raised"],
             "fg": COLORS["text"],
@@ -4868,11 +4846,6 @@ class UsageApp:
         popup_options = (
             ("Trigger every", step_var, ("1%", "5%", "10%", "20%", "25%", "50%")),
             ("Show for", duration_var, ("1 second", "2 seconds", "5 seconds", "10 seconds")),
-            (
-                "Check every",
-                refresh_var,
-                ("15 seconds", "30 seconds", "1 minute", "2 minutes", "5 minutes", "10 minutes", "15 minutes"),
-            ),
         )
         for label_text, variable, values in popup_options:
             row = tk.Frame(popup_section, bg=COLORS["panel"])
@@ -4923,9 +4896,6 @@ class UsageApp:
             self.settings.sound_alert = bool(sound_var.get())
             self.settings.milestone_step = int(step_var.get().rstrip("%"))
             self.settings.milestone_duration = int(duration_var.get().split()[0])
-            self.settings.refresh_interval_seconds = next(
-                seconds for seconds, label in refresh_options.items() if label == refresh_var.get()
-            )
             self.last_alert_buckets = {
                 key: int(value // self.settings.milestone_step)
                 for key, value in (
