@@ -1,45 +1,30 @@
 # Current progress
 
-## Objective
+Objective: Fix intermittent refresh stalls and quota mismatches, make refresh automatic and nearly real time, verify/install the Windows executable, and synchronize GitHub.
 
-Update Codex Usage Counter for GPT-6 model identification, fix background refresh crashes and stale usage, install the verified build, remove older executable copies, and synchronize GitHub.
+Progress: [#########-] 100% — implementation, verification, build, installation and GitHub synchronization complete.
 
-Progress: [██████████] 100% — source merged and v1.1.27 published.
+## Completed work
 
-## Current state
+- Watch all 48 candidates every 500 ms, detect day rollover, and discover new today/yesterday sessions during fast reads.
+- Remove polling interval control, field and persistence. Ignore legacy saved intervals. Fixed automatic fallback: two seconds.
+- Bound full recursive discovery to once per 30 seconds and reuse cached unchanged snapshots.
+- Accept newer downward allowance corrections and preserve them in history; retain protection against older event timestamps.
+- Isolate tray-action errors so worker results are still consumed; configure refresh controls before setting the in-flight latch.
+- Avoid drawing hidden main canvas and hidden/unchanged Statistics. Redraw main canvas when shown.
+- Stale quota signals use the ordinary tray icon and a STALE tooltip instead of a seemingly live numeric percentage.
+- Full suite: 54 pytest tests and 33 subtests passed. Whitespace checks passed.
+- Real Tk end-to-end watcher test: appended downward correction reached the UI result handler in 284.5 ms, no callback errors. Real settings dialog has no polling control.
+- Production PyInstaller build passed with bundled Tcl/Tk. Installed executable, build and deliverable hashes match: `4c144565f029a11f0407122413c621693ee04d927b3940aa9ac1858d32fa16d7`.
+- Installed canonical counter remained running with expected one-file parent/child processes; error log did not grow during startup smoke. Previous executable and JSON settings/history backed up outside repository.
+- Real profile benchmark: cached refresh averages 10-17 ms before OS cache warmup; later warm measurement 2.22 ms. Initial recursive read varied 0.36-2.7 seconds.
 
-- GitHub PR #37 is merged into `main` at `2328c35`.
-- Release [v1.1.27](https://github.com/remriel/codex-usage-counter/releases/tag/v1.1.27) is published from source commit `a32315b`.
-- Published asset SHA-256 values: executable `BA93F3449B79DA26B1F2E1692C8B82C22E2C1F13634632DED6BC05229AB11857`; source ZIP `342C2D5178AB277A5C1304FD32C11D62CE15458D712B59603C29CFD72FF176A5`.
-- The corrected executable is installed at `%LOCALAPPDATA%\Programs\CodexUsageCounter\CodexUsageCounter.exe`, SHA-256 `BA93F3449B79DA26B1F2E1692C8B82C22E2C1F13634632DED6BC05229AB11857`. The startup shortcut targets this path.
-- Settings select the current single-profile home `C:\Users\Gev\.codex`; settings and history remain preserved.
-- Current source suite: `python -m pytest -q` passes **39 tests, 30 subtests**; `pyflakes` and `py_compile` pass.
+## Constraints and blockers
 
-## Findings
+No implementation blocker. Codex can update its server-side usage before it writes the local event. Observed a one-point delay during active work; do not claim exact real-time server parity. No long-duration stability soak or foreground tray inspection performed.
 
-- Official OpenAI documentation lists `gpt-6-astra`, `gpt-6-sol`, and `gpt-6-luna`. Current label formatting hides the version, making GPT-6 and GPT-5.6 Sol/Luna indistinguishable.
-- Live local telemetry uses `limit_id=codex` with 300-minute and 10,080-minute windows. Some `premium` events contain no allowance windows; existing reader skips them.
-- `_read_file` advances the allowance snapshot timestamp to the latest model-context event. A session with newer context but older limits can therefore show stale percentages as LIVE and write incorrect history points. Observed on the user's current profile.
-- `refresh_async` calls `root.after` from a worker thread. This is unsafe around Tk shutdown and is a plausible background crash path. The windowed build has no persistent exception trace.
-- No matching Windows Application or WER crash report was found. The user reports exits during normal background use; the old executable was launched for comparison.
-- The interim packaged build logged a concrete `NameError` in `_render_statistics` when Hourly Statistics had no recent points: `end` was undefined. The renderer now uses `end_time`; a real Tk regression covers empty Hourly, Daily, and Weekly views.
-- Four older executable copies were identified in archived July and September project folders; all four were moved to the Recycle Bin after the corrected stable install was verified. Settings, history, and the source repositories remain intact.
-- After Codex migrated back to the standard single-profile home, the saved `codex_home` override still pointed at the inactive `.codex-chatgpt` folder. The override now points at `.codex`, whose telemetry is current; the counter was restarted and its live reader/history values were verified.
-- Three remaining previous-version source archives (v1.1.24, v1.1.25, and v1.1.26) were moved to the Recycle Bin. The v1.1.27 executable, source ZIP, installed app, settings, and history were retained.
-- A fresh executable inventory found only the verified build in the repository `dist` folder and at the stable install path; both hashes match. A matching deliverable copy is in the current task's `outputs` folder.
+## Completion and next steps
 
-## Implementation and verification
+Source commit `484a5bf` is pushed to `fix/realtime-refresh-sync`. PR: https://github.com/remriel/codex-usage-counter/pull/38. The verified executable is installed and copied to the task outputs directory. Settings were saved without the obsolete polling key, preserving display/source/startup/milestone preferences and 4,398 history points. Installed parent/child processes are responsive; persistent errors.log remains unchanged since September 22.
 
-- Allowance freshness now comes only from allowance events; context-only sessions can update the shown model independently. Non-`codex` limit buckets are ignored.
-- GPT-6 Astra/Sol/Luna labels include their generation, distinct from GPT-5.6 names.
-- Reader workers use a queue; Tk receives results on its own thread. Recurring refresh callbacks reschedule after recoverable errors. Exceptions and native faults are written to `%APPDATA%\CodexUsageCounter\errors.log`.
-- Malformed non-object settings and out-of-range numeric timestamps no longer cause startup/render failures.
-- Regression suite passes 39 tests and 30 subtests. `pyflakes` found and helped remove an existing unused test assignment; no undefined names remain. `git diff --check` and bytecode compilation pass.
-- Real Tk smoke passed with empty history across all three views and with 1,080 real history points while a hidden Statistics view received a background refresh; no callback errors.
-- The first packaged build launched but failed on the empty Hourly branch; it must be replaced. Do not reuse hash `81826C19...` for release.
-- The corrected packaged build launched from the stable install path, both one-file processes remained responsive, and `%APPDATA%\CodexUsageCounter\errors.log` did not grow during the installation smoke. The old logged exceptions remain for diagnosis.
-- Keep temporary lint dependencies outside the repository: placing `pyflakes` under ignored `work/` made an unrestricted `pytest` run discover the package's own tests. The folder was moved to the current task's scratch directory, and the repository suite again passed 39 tests and 30 subtests.
-
-## Completion
-
-The corrected executable is installed, running from the stable install path, and available in the current task's `outputs` folder. Four older executable copies and three old source archives were moved to the Recycle Bin. The counter reads the active `.codex` profile, settings and history were preserved, and its latest source-specific history point matches the live allowance reader. The source PR is merged and the release assets and tag were verified.
+No implementation work remains. PR merge and a public release are still pending; this task does not claim a published release. If a future report describes a stop, inspect errors.log and current telemetry timestamps before changing the polling interval. An extended stability soak remains useful for rare failures.

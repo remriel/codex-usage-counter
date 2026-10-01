@@ -9,14 +9,14 @@ A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, rese
 - Shows independent 5-hour and weekly Codex allowance percentages, reset countdowns, pace, and ETA.
 - Shows the currently tracked model and reasoning effort prominently on the main counter, including **GPT-6 ASTRA**, **GPT-6 SOL**, and **GPT-6 LUNA**. It keeps GPT-5.6 Sol, Terra, and Luna distinct, such as **TRACKING · GPT-6 SOL · HIGH**.
 - Tracks current-task input, cached-input, output, reasoning, total, and last-response token counts from local Codex aggregate telemetry.
-- Refreshes within about a second when an already-discovered active Codex session file changes; configurable polling remains the fallback.
+- Checks all 48 tracked session files every 500 ms for changes; new sessions in today’s folder are detected on the same watcher. Automatic two-second polling handles fallback reads; no polling interval setting is needed.
 - Shows timestamped model and reasoning-effort changes on the detailed Hourly chart with thin, subtle amber model markers and thin, subtle dashed-coral effort markers.
 - Shows the active or selected model and reasoning effort as a large, simplified **Hourly** Statistics header label such as **SOL · HIGH**; aggregate Daily and Weekly views omit context because it can change within an interval.
 - Keeps Statistics focused on **Hourly** (the default; point anywhere and mouse-wheel zoom from one minute through all retained history), **Daily**, and **Weekly** views. Hourly zoom is anchored to the period beneath the cursor instead of always snapping back to the latest data, and right-button dragging pans left or right through retained history.
 - Displays the most constrained allowance directly in the notification-area tray icon, so the number is useful without hovering; the tooltip identifies both windows.
 - Shows a custom in-app tray milestone popup above the Windows notification area; it does not use Windows toast or balloon notifications.
-- Polls local usage every two minutes by default; every automatic read refreshes usage, rate, and ETA together, while **Refresh now** reads immediately outside that schedule.
-- Supports Used or Remaining display mode, always-on-top behavior, optional Start with Windows behavior, optional custom milestone chime, configurable polling, trigger percentage, and popup duration.
+- Polls local usage automatically every two seconds; every automatic read refreshes usage, rate, and ETA together, while **Refresh now** reads immediately outside that schedule.
+- Supports Used or Remaining display mode, always-on-top behavior, optional Start with Windows behavior, optional custom milestone chime, trigger percentage, and popup duration.
 - Keeps minute-level usage history in the zoomable **Hourly** view, plus stock-chart-style **Daily** and **Weekly** intervals with reset-aware 5-hour/weekly totals, pace, and token activity. The token pane keeps activity bars and overlays a clearly labeled tokens/min trend line; Daily and Weekly usage and pace bars include thin trend lines with circular points across adjacent recorded intervals.
 - Opens Statistics as a fullscreen view with a responsive, edge-to-edge chart canvas.
 - Keeps matching 5-hour and weekly cards side by side and updates those cards when an Hourly, Daily, or Weekly point is clicked, dragged across, or selected with the mouse wheel.
@@ -28,7 +28,7 @@ The app also shows a custom tray-area popup when fresh telemetry confirms a 5-ho
 
 1. Download `CodexUsageCounter.exe` from the [latest release](../../releases/latest).
 2. Run it. The app starts in the notification area and opens its counter window.
-3. Use **Settings** to choose Used or Remaining, enable or disable Start with Windows, and adjust polling or milestone behavior.
+3. Use **Settings** to choose Used or Remaining, enable or disable Start with Windows, and adjust milestone behavior.
 4. To start it with Windows, run `install-startup.ps1` from the downloaded package, or use the packaged app path when prompted.
 
 The executable is self-contained and does not require Python to be installed.
@@ -71,7 +71,7 @@ python .\codex_usage_counter.py
 
 The source app uses Python’s built-in Tk interface and Windows APIs for the tray icon. It has no third-party runtime dependency.
 
-Run the synthetic telemetry regression tests with `python -m unittest -v`. These cover model labels, invalid telemetry, swapped allowance windows, and session discovery. Discovery retains only the 48 newest candidates while scanning, and skips files that disappear during the scan.
+Run the synthetic telemetry regression tests with `python -m unittest -v`. These cover model labels, invalid telemetry, swapped allowance windows, and session discovery. Discovery retains only the 48 newest candidates and skips files that disappear mid-scan. Frequent reads reuse candidates and check today/yesterday folders; full recursive discovery runs every 30 seconds. Newer downward quota corrections are accepted instead of being permanently clamped to a prior maximum. Unchanged or hidden Statistics views and a hidden main canvas avoid unnecessary redraws. Stale telemetry removes the numeric tray icon and labels the tooltip STALE.
 
 ## Build a standalone executable
 
