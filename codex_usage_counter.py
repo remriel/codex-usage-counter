@@ -26,6 +26,8 @@ from typing import Any, Optional
 import tkinter as tk
 from tkinter import messagebox
 
+from account_usage import AccountUsageClient
+
 try:
     import winsound
 except ImportError:
@@ -1094,6 +1096,7 @@ class UsageSnapshot:
     reasoning_effort: Optional[str] = None
     context_timestamp: Optional[float] = None
     error: Optional[str] = None
+    allowance_source: str = "local"
 
     @property
     def has_data(self) -> bool:
@@ -1598,6 +1601,74 @@ class CodexTelemetryReader:
         return UsageSnapshot(error="Open Codex once to populate the local usage signal")
 
 
+class CombinedUsageReader:
+    """Account allowances include cloud work; local files supply recent task metadata."""
+
+    def __init__(self, codex_home: Optional[str] = None) -> None:
+        self.local = CodexTelemetryReader(codex_home)
+        self.codex_home = self.local.codex_home
+        self.account = AccountUsageClient(self.codex_home)
+        self._account_revision = -1
+
+    @staticmethod
+    def account_snapshot(payload: Any, timestamp: Optional[float]) -> Optional[UsageSnapshot]:
+        if not isinstance(payload, dict) or timestamp is None:
+            return None
+        buckets = payload.get("rateLimitsByLimitId")
+        limits = buckets.get("codex") if isinstance(buckets, dict) else payload.get("rateLimits")
+        if not isinstance(limits, dict) or limits.get("limitId") not in (None, "codex"):
+            return None
+        normalized = {}
+        for name in ("primary", "secondary"):
+            window = limits.get(name)
+            if isinstance(window, dict):
+                normalized[name] = {
+                    "used_percent": number(window.get("usedPercent")),
+                    "window_minutes": number(window.get("windowDurationMins")),
+                    "resets_at": number(window.get("resetsAt")),
+                }
+        five_hour, weekly = CodexTelemetryReader._allowance_windows(normalized)
+        fields: dict[str, Any] = {}
+        for prefix, window in (("five_hour_", five_hour), ("", weekly)):
+            if window is not None and window["used_percent"] is not None:
+                fields[prefix + "used_percent"] = clamp(window["used_percent"], 0, 100)
+                fields[prefix + "window_minutes"] = int(window["window_minutes"]) if window["window_minutes"] else None
+                fields[prefix + "resets_at"] = window["resets_at"]
+        if not fields:
+            return None
+        return UsageSnapshot(**fields, timestamp=timestamp, source_path="codex-account-usage",
+                             plan_type=metadata_text(limits.get("planType")), allowance_source="account")
+
+    def read(self) -> UsageSnapshot:
+        local = self.local.read()
+        payload, timestamp, error, revision = self.account.snapshot()
+        self._account_revision = revision
+        account = self.account_snapshot(payload, timestamp)
+        if account is None:
+            return replace(local, error=error or "Account allowances unavailable; local fallback")
+        if error and (local.timestamp or 0) > (account.timestamp or 0):
+            return replace(local, error=error + " · local fallback")
+        # A successful account poll must never make old local model/token data look active.
+        # These fields are explicitly labelled local in the UI and are not cloud token totals.
+        if local.has_data and time.time() - (local.timestamp or 0) <= 30:
+            activity = {name: getattr(local, name) for name in (
+                "source_path", "input_tokens", "cached_input_tokens", "output_tokens",
+                "reasoning_tokens", "total_tokens", "last_tokens", "context_window",
+                "model", "reasoning_effort", "context_timestamp",
+            )}
+            account = replace(account, **activity)
+        return replace(account, error=error)
+
+    def local_signal_changed(self) -> bool:
+        return self.account.snapshot()[3] != self._account_revision or self.local.local_signal_changed()
+
+    def refresh_account(self) -> None:
+        self.account.refresh()
+
+    def close(self) -> None:
+        self.account.close()
+
+
 if os.name == "nt":
     _user32 = ctypes.windll.user32
     _shell32 = ctypes.windll.shell32
@@ -2035,14 +2106,14 @@ class UsageApp:
         self.root.geometry(self._initial_geometry())
         self.root.attributes("-topmost", self.settings.always_on_top)
         self.root.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
-        self.root.bind("<Control-r>", lambda _event: self.refresh_async())
+        self.root.bind("<Control-r>", lambda _event: self.refresh_now())
 
         try:
             self.root.iconbitmap(str(asset_path("usage-orbit.ico")))
         except tk.TclError:
             pass
 
-        self.reader = CodexTelemetryReader(self.settings.codex_home)
+        self.reader = CombinedUsageReader(self.settings.codex_home)
         self.history = UsageHistory(history_path_for_codex_home(self.reader.codex_home))
         self.snapshot = UsageSnapshot()
         self.last_checked_at: Optional[float] = None
@@ -2368,6 +2439,8 @@ class UsageApp:
         self.canvas.create_text(68, 23, text="CODEX USAGE", anchor="w", fill=COLORS["text"], font=("Segoe UI", 10, "bold"))
         context_name = format_prominent_context(snapshot.model, snapshot.reasoning_effort)
         context_text = f"TRACKING · {context_name}"
+        if snapshot.allowance_source == "account":
+            context_text = f"LOCAL · {context_name}" if snapshot.model else "ACCOUNT · LOCAL + CLOUD"
         if len(context_text) > 38:
             context_text = f"{context_text[:35].rstrip()}…"
         self.canvas.create_text(
@@ -2436,7 +2509,7 @@ class UsageApp:
 
         token_rate = self._current_token_rate() if snapshot.total_tokens is not None and not snapshot.is_stale else None
         self._rounded_rect(16, 314, 444, 354, 10, COLORS["panel_raised"], COLORS["line"])
-        self.canvas.create_text(30, 327, text="TASK TOKENS", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
+        self.canvas.create_text(30, 327, text="LOCAL TOKENS", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
         self.canvas.create_text(30, 344, text=format_token_count(snapshot.total_tokens), anchor="w", fill=COLORS["cyan"], font=("Segoe UI", 12, "bold"))
         self.canvas.create_text(141, 327, text="TOKENS/MIN", anchor="w", fill=COLORS["muted"], font=("Segoe UI", 8, "bold"))
         self.canvas.create_text(141, 344, text=format_token_rate(token_rate), anchor="w", fill=COLORS["coral"], font=("Segoe UI", 10, "bold"))
@@ -2449,12 +2522,12 @@ class UsageApp:
         self.canvas.create_text(270, 338, text=token_detail, anchor="w", fill=COLORS["soft"], font=("Segoe UI", 8, "bold"))
 
         if snapshot.error:
-            footer = f"{snapshot.error}  ·  {format_updated(self.last_checked_at).replace('Updated ', 'Checked ', 1)}"
+            footer = snapshot.error
             footer_color = COLORS["amber"]
         else:
-            checked = format_updated(self.last_checked_at).replace("Updated ", "Checked ", 1)
             signal = format_updated(snapshot.timestamp).replace("Updated ", "signal ", 1)
-            footer = f"{checked}  ·  {signal}"
+            source = "Account · local + cloud" if snapshot.allowance_source == "account" else "Local telemetry"
+            footer = f"{source}  ·  {signal}"
             footer_color = COLORS["muted"]
         self.canvas.create_text(20, 372, text=footer, anchor="w", fill=footer_color, font=("Segoe UI", 8))
 
@@ -2474,7 +2547,7 @@ class UsageApp:
             taskbar_label = "Codex Usage Counter"
             tray_tip = "Codex Usage Counter • open Codex to connect"
         if snapshot.is_stale:
-            tray_tip += " · STALE local signal"
+            tray_tip += " · STALE signal"
             taskbar_label += " · STALE"
         self.root.title(taskbar_label)
         if tray_tip != self.last_tray_tooltip:
@@ -2566,6 +2639,7 @@ class UsageApp:
     def refresh_now(self) -> None:
         """Read immediately, independently of the automatic polling timer."""
 
+        self.reader.refresh_account()
         self.refresh_async()
 
     def _maybe_show_milestone(self, result: UsageSnapshot) -> None:
@@ -4454,7 +4528,7 @@ class UsageApp:
         canvas.create_text(
             18,
             card_layout["history_title_y"],
-            text="ACTIVE-TIME HISTORY",
+            text="RECORDED USAGE HISTORY",
             anchor="w",
             fill=COLORS["soft"],
             font=("Segoe UI", 8, "bold"),
@@ -4476,7 +4550,7 @@ class UsageApp:
         canvas.create_text(
             18,
             card_layout["history_subtitle_y"],
-            text=f"{scope_label} · {scope_position} · sessions packed together",
+            text=f"{scope_label} · {scope_position} · recorded samples",
             anchor="w",
             fill=COLORS["muted"],
             font=("Segoe UI", 8),
@@ -4976,6 +5050,7 @@ class UsageApp:
     def quit(self) -> None:
         global _instance_mutex, _show_event
         try:
+            self.reader.close()
             self.history.save(force=True)
             self.tray_popup.close()
             self.close_statistics()

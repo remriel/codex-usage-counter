@@ -2,13 +2,15 @@
 
 A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, reset countdowns, and token activity.
 
+**Cloud tracking:** Account allowances are refreshed every 15 seconds through your installed Codex app-server, including usage from Codex Cloud. Keep the counter running on Windows and keep Codex signed in to the selected profile. Local JSONL telemetry remains available as a fallback.
+
 [Download the latest Windows release](../../releases/latest)
 
 ## What it does
 
 - Shows independent 5-hour and weekly Codex allowance percentages, reset countdowns, pace, and ETA.
 - Shows the currently tracked model and reasoning effort prominently on the main counter, including **GPT-6 ASTRA**, **GPT-6 SOL**, and **GPT-6 LUNA**. It keeps GPT-5.6 Sol, Terra, and Luna distinct, such as **TRACKING · GPT-6 SOL · HIGH**.
-- Tracks current-task input, cached-input, output, reasoning, total, and last-response token counts from local Codex aggregate telemetry.
+- Tracks recent local-task input, cached-input, output, reasoning, total, and last-response token counts. Cloud task token totals and cloud model attribution are not exposed by the allowance reader.
 - Checks all 48 tracked session files every 500 ms for changes; new sessions in today’s folder are detected on the same watcher. Automatic two-second polling handles fallback reads; no polling interval setting is needed.
 - Shows timestamped model and reasoning-effort changes on the detailed Hourly chart with thin, subtle amber model markers and thin, subtle dashed-coral effort markers.
 - Shows the active or selected model and reasoning effort as a large, simplified **Hourly** Statistics header label such as **SOL · HIGH**; aggregate Daily and Weekly views omit context because it can change within an interval.
@@ -45,7 +47,15 @@ The executable is self-contained and does not require Python to be installed.
 
 ## How the data is read
 
-The counter reads aggregate `rate_limits` and `token_count` events, plus the model and reasoning-effort metadata required for chart annotations, from JSONL files under the selected Codex home:
+The counter launches one hidden `codex app-server` process and uses the documented [`account/rateLimits/read`](https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt) method. It reads account allowances every 15 seconds independently of local session activity. This allows 5-hour and weekly percentages, history, pace, and reset countdowns to keep updating while you work in a cloud environment. The counter must be running and online to collect samples; it does not backfill the period when it was closed.
+
+The Codex executable is discovered on PATH (`codex.exe` on Windows), with `%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe` as an additional Windows location. If it is missing, install Codex CLI and sign in to the same ChatGPT account/profile. The packaged counter still needs no Python installation. The counter uses Codex's existing sign-in and requires no OpenAI API key. It sends only initialization and usage-read requests, never starts an agent turn, and never redeems a reset or changes your plan.
+
+Account reads run on their own background thread, with request timeouts and capped retry backoff. **Refresh now** also requests a fresh account reading. Connection or sign-in failures are displayed in the footer and preserve the last successful account timestamp; newer local telemetry can take over. Failed requests do not make cached percentages appear fresh.
+
+`ACCOUNT · LOCAL + CLOUD` identifies account tracking when no recent local task metadata is available. Model and token values are explicitly local-only and disappear after 30 seconds without local allowance telemetry. They must not be interpreted as the active cloud task's model or token totals. Account polling records observations while the counter is running, including unchanged allowances during idle time.
+
+The local fallback reads aggregate `rate_limits` and `token_count` events, plus model and reasoning-effort metadata, from JSONL files under the selected Codex home:
 
 ```text
 <selected Codex home>\sessions
@@ -57,7 +67,7 @@ Statistics history is kept per source so DeepSeek and ChatGPT samples cannot mix
 
 The reader uses the `codex` rate-limit bucket when telemetry provides a bucket ID and identifies allowance windows by their reported duration: 300 minutes for the 5-hour limit and 10,080 minutes for the weekly limit. It does not assume `primary` always means weekly, so both windows remain correct if their field positions change. Historical weekly samples remain available; the 5-hour history begins when Codex first reports that window and is not fabricated for earlier periods.
 
-It does not read `auth.json`, API keys, cookies, browser profiles, or store conversation content. The only extra session context it retains is a short model identifier and reasoning-effort value. Model context can update separately from allowance readings; a newer model event never makes old usage percentages appear fresh or adds a false point to history. Token totals are scoped to the currently active local Codex task. Token-to-percentage statistics are observed relationships, not fixed conversions: model behavior, caching, reasoning, concurrent tasks, and delayed allowance reporting can change them. The usage dashboard link opens the official dashboard for the authoritative view. Because the counter is based on local session telemetry, it can show a stale signal until a newer allowance event is written; **Refresh now** forces an immediate local read.
+The counter does not read `auth.json`, API keys, cookies, browser profiles, or store conversation content. Codex itself manages authentication inside its child process using the selected profile. The child's inherited `OPENAI_API_KEY` is removed so the account request uses ChatGPT sign-in. Raw app-server errors are not logged or displayed. The only extra local session context retained is a short model identifier and reasoning-effort value. A new local model event never makes old usage percentages appear fresh. Token-to-percentage statistics remain observed relationships, not fixed conversions: concurrent local/cloud tasks, caching, and reporting delays affect them. The dashboard link opens the official usage page. If account access is unavailable, local fallback can remain stale until Codex writes a new allowance event.
 
 If the app closes unexpectedly, `%APPDATA%\CodexUsageCounter\errors.log` records Python callback and worker tracebacks plus native fault traces where available. The log does not record conversation text or credentials.
 
