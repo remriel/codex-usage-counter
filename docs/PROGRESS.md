@@ -2,23 +2,24 @@
 
 Objective: Package and publish Codex Usage Counter v1.2.0 with Codex Cloud allowance tracking.
 
-Progress: [########--] 80% toward published release.
+Progress: [##########] 100% — v1.2.0 published and installed.
 
 - [x] Confirm PR #40 merged into main at commit 847b91d.
-- [x] Confirm previous release asset format: Windows EXE plus versioned source ZIP.
-- [x] Define application version 1.2.0 in shared source metadata.
+- [x] Define application version 1.2.0 in shared metadata.
 - [x] Run release verification suite: 58 tests passed.
-- [x] Build Windows executable from main commit 703f491 with Tcl/Tk libraries staged.
-- [ ] Copy release executable and source archive into outputs from the v1.2.0 tag.
-- [ ] Replace installed executable and verify the packaged hashes match.
-- [ ] Tag v1.2.0 and publish both assets with notes.
-- [ ] Verify the GitHub release and update final project notes.
+- [x] Build Windows executable with Tcl/Tk libraries staged.
+- [x] Tag source as v1.2.0 at commit c1b467e.
+- [x] Generate versioned source ZIP from the v1.2.0 tag.
+- [x] Publish the executable and source archive in the GitHub release.
+- [x] Replace installed executable and verify its SHA256 matches the published asset.
+- [x] Save release assets, screenshot, and final project notes in outputs.
 
-Build SHA256: EFEBD0EEC5EA5B211488A3F11F8872D20EDAF3CD0CBCE0D20EC41D3535D4E372.
-Build size: 15,222,715 bytes.
+Release: https://github.com/remriel/codex-usage-counter/releases/tag/v1.2.0
 
-Current state: build passed; v1.2.0 has not been tagged or published.
+Windows executable SHA256: EFEBD0EEC5EA5B211488A3F11F8872D20EDAF3CD0CBCE0D20EC41D3535D4E372
+Source archive SHA256: 4833A16821CAD1461246B02BD8E164727CDC5F3A52AA56701F8A09F0D3BD6E92
+Published assets: CodexUsageCounter.exe (15,222,715 bytes), CodexUsageCounter-source-v1.2.0.zip (2,074,211 bytes).
 
 Blockers: none.
 
-Next steps: archive the exact tagged source; upload source and EXE assets to GitHub; install the build; verify final hashes and release URL; update deliverables and project notes.
+Next steps: none. v1.2.0 is published as the latest release and the matching executable is installed.
