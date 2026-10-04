@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from version import APP_VERSION
+
 
 ACCOUNT_POLL_SECONDS = 15
 REQUEST_TIMEOUT_SECONDS = 15
@@ -138,7 +140,7 @@ class AccountUsageClient:
         threading.Thread(target=self._receive, args=(self._process, self._messages, self._stop),
                          name="codex-account-stdio", daemon=True).start()
         self._request("initialize", {"clientInfo": {
-            "name": "codex_usage_counter", "title": "Codex Usage Counter", "version": "1.2.0"
+            "name": "codex_usage_counter", "title": "Codex Usage Counter", "version": APP_VERSION
         }})
         self._send({"method": "initialized", "params": {}})
 

@@ -1,21 +1,20 @@
 # Current progress
 
-Objective: Keep allowance tracking current during Codex Cloud work.
+Objective: Package and publish Codex Usage Counter v1.2.0 with Codex Cloud allowance tracking.
 
-Progress: [##########] 100% of implementation and Windows delivery checks completed. A dedicated cloud workload acceptance run remains unobserved.
+Progress: [######----] 60% toward published release.
 
-- [x] Inspect source, tests, Git state, and reconcile stale notes.
-- [x] Confirm documented account usage method and live access from selected profile.
-- [x] Implement independent 15-second account polling, safe local fallback, bounded requests, retry backoff, source labels, and child cleanup.
-- [x] All 58 regression tests passed.
-- [x] Two live account reads updated allowances with zero local session files; process cleanup passed.
-- [x] Final Windows executable built with staged Tcl/Tk libraries.
-- [x] Replace installed executable, preserve settings/history, verify installed/output SHA256 match, and relaunch.
-- [x] Capture actual UI with live account data and isolated empty local sessions at 96 DPI.
-- [x] Save executable, screenshot, source archive, and project notes; synchronize completed source to GitHub.
+- [x] Confirm PR #40 merged into main at commit 847b91d.
+- [x] Confirm the existing release package format: Windows EXE plus versioned source ZIP.
+- [x] Define application version 1.2.0 in shared source metadata.
+- [ ] Run the release verification suite.
+- [ ] Build the Windows executable from main and create the source archive from the same commit.
+- [ ] Replace the installed executable; verify the package hashes match.
+- [ ] Tag v1.2.0 and publish release assets with notes.
+- [ ] Copy final PROGRESS.md and PROJECT_STATE.md to the deliverables directory.
 
-Build SHA256: D3F84101E084CAD83F2E1A35C8A8DD0F3013F79324B5198B2A21D82CDA80BDD7.
+Current state: release version metadata is committed locally; previous installed v1.1.29 and the earlier v1.2.0 untagged build remain untouched until the release build succeeds.
 
-Blockers: none for delivery. Native screenshot capture timed out; direct application screenshot instrumentation succeeded. Staging drive read-only flags required clearing on verified generated build directories before rebuilding.
+Blockers: none.
 
-Next steps: use the installed app during a cloud task and compare with the official account dashboard. Per-cloud-task model/token attribution is not included. No public versioned release is claimed.
+Next steps: validate, build, package, tag, publish, install, and verify the release.

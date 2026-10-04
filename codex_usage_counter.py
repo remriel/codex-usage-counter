@@ -27,6 +27,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 from account_usage import AccountUsageClient
+from version import APP_VERSION
 
 try:
     import winsound

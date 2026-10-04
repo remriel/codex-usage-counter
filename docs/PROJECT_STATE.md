@@ -35,6 +35,18 @@
 - Native Computer Use screenshot capture timed out. A direct Tk verification instance captured live account data using isolated history, empty local sessions, and normalized 96 DPI. This screenshot does not establish high-DPI layout acceptance.
 - Source and notes are synchronized on the cloud-usage fix branch. A dedicated cloud task acceptance run remains unobserved.
 
-## RESUME HERE - completed
+## Prior cloud fix handoff (completed)
 
 Implementation, regression checks, live account polling, Windows build, installed replacement, and delivery are complete. Follow up only on a new request or a cloud-task discrepancy. Cloud task token/model attribution remains unavailable through this allowance reader.
+
+## Release v1.2.0 in progress
+
+- PR #40 has merged to main at `847b91d` and implements app-server account reads for Cloud allowance tracking.
+- Latest published version before this work is v1.1.29. This package targets v1.2.0 and must contain both `CodexUsageCounter.exe` and `CodexUsageCounter-source-v1.2.0.zip`.
+- `version.py` is the canonical runtime version. Keep Codex app-server `clientInfo.version` in sync with it.
+- Build only after source checks pass. Clear read-only flags only in verified `build`/`dist` generated directories if staging cleanup fails on this drive. Verify source and installed executable hashes after packaging.
+- Publish the tagged source and two release assets only after a successful build. Then replace the installed executable and copy final project notes to outputs.
+
+## RESUME HERE
+
+Complete the v1.2.0 test/build/package/publish/install steps in `docs/PROGRESS.md`. Preserve existing user settings and telemetry history. Do not claim a release until the GitHub release page reports all expected assets.

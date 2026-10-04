@@ -1,5 +1,7 @@
 # Codex Usage Counter
 
+Current release: **v1.2.0**
+
 A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, reset countdowns, and token activity.
 
 **Cloud tracking:** Account allowances are refreshed every 15 seconds through your installed Codex app-server, including usage from Codex Cloud. Keep the counter running on Windows and keep Codex signed in to the selected profile. Local JSONL telemetry remains available as a fallback.
