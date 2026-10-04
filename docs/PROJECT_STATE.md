@@ -27,10 +27,6 @@
 - https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt
 - https://learn.chatgpt.com/docs/cloud
 
-## RESUME HERE
-
-Complete focused account checks, verify polling with frozen/missing local telemetry, build, capture the window, and synchronize GitHub. A real cloud workload acceptance run remains unobserved.
-
 ## Completed delivery
 
 - All 58 tests passed; two live account polls succeeded with an empty local sessions directory and cleaned up the child.
