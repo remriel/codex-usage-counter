@@ -2,51 +2,31 @@
 
 ## Architecture and decisions
 
-- Windows Tk app with a background telemetry reader, main-thread update queue, native tray icon, and PyInstaller one-file packaging. Python 3.14 needs Tcl/Tk data staging.
-- Local JSONL files cannot provide timely allowance changes during Codex Cloud work. Account allowances now use the installed Codex executable's documented `account/rateLimits/read` app-server method.
-- `account_usage.py`: hidden stdio child, initialize/initialized handshake, independent 15-second polling, bounded requests, capped retry backoff, and child cleanup. No agent thread or inference turn is created.
-- The counter passes its selected `codex_home` to Codex. Codex manages sign-in; the counter does not read or copy credentials, cookies, or browser profiles. The child's inherited `OPENAI_API_KEY` is removed to avoid API-key auth for a ChatGPT allowance query.
-- `CombinedUsageReader` prefers account snapshots and retains local telemetry as fallback. Failures preserve the last success timestamp. Select the `codex` bucket and identify windows by duration.
-- Model and token details remain local-only and are included only when local allowance telemetry is at most 30 seconds old. Account polling must not freshen old local task data or invent cloud token totals.
-- Local monitoring remains 500 ms for changes, a two-second fallback, and full discovery every 30 seconds. History remains isolated by selected profile.
-- Same-window downward corrections are valid. Rate segmentation uses changed reset timestamps. This fix is in main at `6fef7e2` (PR #39); previous pending v1.1.29 instructions were stale.
+- Windows Tk tray app. PyInstaller one-file package; Python 3.14 needs Tcl/Tk data staging in `build.ps1`.
+- Account allowances are read from the installed Codex app-server via documented `account/rateLimits/read`, independently from local JSONL telemetry.
+- `account_usage.py` runs a hidden stdio app-server child, initializes once, polls every 15 seconds, uses request timeouts and capped retry backoff, and cleans up on exit.
+- Counter passes the selected `codex_home` to the child. Existing Codex sign-in handles authentication. No local auth files, browser profiles, conversation text, or API keys are read or persisted.
+- Account buckets are isolated to `codex`; allowance windows are identified by duration. Local task model/token metadata expires after 30 seconds without a new local allowance event.
+- App-server request metadata uses `APP_VERSION` from `version.py`; current release candidate is v1.2.0.
 
 ## Discoveries and constraints
 
-- Installed CLI: `%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe`, version `0.130.0-alpha.5`.
-- Current settings select `%USERPROFILE%\.codex`; a live account read succeeded. Older `.codex-chatgpt` returned HTTP 401. Never silently switch profiles.
-- Closing stdin immediately after requests can end app-server before asynchronous responses arrive. Keep the connection open and correlate response IDs.
-- Account polling follows aggregate allowances, without per-cloud-task attribution or cloud task token totals.
-- Requires a discoverable Codex executable and existing ChatGPT sign-in. Missing CLI/service/auth must produce a clear fallback.
+- Current settings use the default ChatGPT profile. A live account read worked there. A different stale profile returned 401, so the app never silently switches profiles.
+- Account polling works with no local session files and tracks account-level cloud allowance usage. OpenAI's account response does not attribute percentages, model names, or token totals to an individual cloud task.
+- The account reader needs a discoverable Codex executable and signed-in selected profile.
+- Generated `build` and `dist` files can be read-only on this drive. Before a rebuild, resolve and validate those directories under the repository, reject reparse points, and clear only read-only flags inside those generated trees.
+- PR #40 merged to main as 847b91d. Version 1.2.0 adds cloud account polling.
+- Release build from main 703f491 completed successfully. Windows executable SHA-256: `EFEBD0EEC5EA5B211488A3F11F8872D20EDAF3CD0CBCE0D20EC41D3535D4E372`.
+- The 58-test suite passed before packaging. The current executable was built with the production `build.ps1 -SkipAssetGeneration` workflow.
 
-## Relevant files and references
+## Relevant files
 
-- `account_usage.py`: transport and lifecycle.
-- `codex_usage_counter.py`: `CombinedUsageReader`, `UsageSnapshot`, source labels, history.
-- `test_account_usage.py`: cloud-source regression coverage.
-- https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt
-- https://learn.chatgpt.com/docs/cloud
-
-## Completed delivery
-
-- All 58 tests passed; two live account polls succeeded with an empty local sessions directory and cleaned up the child.
-- Windows build completed and installed/output hashes matched. Existing profile settings and history were preserved.
-- Generated staging files acquired read-only flags on this drive. Clear those flags only within verified build/dist trees before repeated packaging; do not reuse a stale executable after build failure.
-- Native Computer Use screenshot capture timed out. A direct Tk verification instance captured live account data using isolated history, empty local sessions, and normalized 96 DPI. This screenshot does not establish high-DPI layout acceptance.
-- Source and notes are synchronized on the cloud-usage fix branch. A dedicated cloud task acceptance run remains unobserved.
-
-## Prior cloud fix handoff (completed)
-
-Implementation, regression checks, live account polling, Windows build, installed replacement, and delivery are complete. Follow up only on a new request or a cloud-task discrepancy. Cloud task token/model attribution remains unavailable through this allowance reader.
-
-## Release v1.2.0 in progress
-
-- PR #40 has merged to main at `847b91d` and implements app-server account reads for Cloud allowance tracking.
-- Latest published version before this work is v1.1.29. This package targets v1.2.0 and must contain both `CodexUsageCounter.exe` and `CodexUsageCounter-source-v1.2.0.zip`.
-- `version.py` is the canonical runtime version. Keep Codex app-server `clientInfo.version` in sync with it.
-- Build only after source checks pass. Clear read-only flags only in verified `build`/`dist` generated directories if staging cleanup fails on this drive. Verify source and installed executable hashes after packaging.
-- Publish the tagged source and two release assets only after a successful build. Then replace the installed executable and copy final project notes to outputs.
+- `version.py`: release version constant.
+- `account_usage.py`: Codex app-server client and polling lifecycle.
+- `codex_usage_counter.py`: CombinedUsageReader, UI source status and usage history.
+- `test_account_usage.py`: cloud-reader tests.
+- `build.ps1`, `scripts/prepare_tk_data.py`: standalone Windows build and Tcl/Tk packaging.
 
 ## RESUME HERE
 
-Complete the v1.2.0 test/build/package/publish/install steps in `docs/PROGRESS.md`. Preserve existing user settings and telemetry history. Do not claim a release until the GitHub release page reports all expected assets.
+Tag the release-prep commit as v1.2.0, generate `CodexUsageCounter-source-v1.2.0.zip` from that exact tag, publish it and `CodexUsageCounter.exe`, then replace the installed executable and verify hashes. Update this document and PROGRESS.md after GitHub confirms the release assets.
