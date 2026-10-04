@@ -2,24 +2,43 @@
 
 ## Architecture and decisions
 
-- Windows Tk desktop app with a background reader, main-thread update queue, and native tray icon. PyInstaller one-file packaging; Python 3.14 requires Tcl/Tk zip-data staging.
-- Source is aggregate allowance data in local Codex session JSONL. Server usage is authoritative and can update before this source emits a matching event.
-- Automatic refresh: inspect up to 48 session candidates at 500 ms, fallback reader every two seconds, and full recursive discovery every 30 seconds.
-- Allowance percentage corrections within one reset window are valid newer readings. They must not be clamped or treated as a new allowance reset.
-- Rate regression uses `resets_at` / `five_hour_resets_at` to detect actual quota resets. A downward corrected sample in the same window must not break the rate-line segment or clear its regression window.
+- Windows Tk app with a background telemetry reader, main-thread update queue, native tray icon, and PyInstaller one-file packaging. Python 3.14 needs Tcl/Tk data staging.
+- Local JSONL files cannot provide timely allowance changes during Codex Cloud work. Account allowances now use the installed Codex executable's documented `account/rateLimits/read` app-server method.
+- `account_usage.py`: hidden stdio child, initialize/initialized handshake, independent 15-second polling, bounded requests, capped retry backoff, and child cleanup. No agent thread or inference turn is created.
+- The counter passes its selected `codex_home` to Codex. Codex manages sign-in; the counter does not read or copy credentials, cookies, or browser profiles. The child's inherited `OPENAI_API_KEY` is removed to avoid API-key auth for a ChatGPT allowance query.
+- `CombinedUsageReader` prefers account snapshots and retains local telemetry as fallback. Failures preserve the last success timestamp. Select the `codex` bucket and identify windows by duration.
+- Model and token details remain local-only and are included only when local allowance telemetry is at most 30 seconds old. Account polling must not freshen old local task data or invent cloud token totals.
+- Local monitoring remains 500 ms for changes, a two-second fallback, and full discovery every 30 seconds. History remains isolated by selected profile.
+- Same-window downward corrections are valid. Rate segmentation uses changed reset timestamps. This fix is in main at `6fef7e2` (PR #39); previous pending v1.1.29 instructions were stale.
 
-## Current release and follow-up
+## Discoveries and constraints
 
-- Public release v1.1.28 is live. It includes fast refresh and correction handling but contains a pace-series bug: any decreasing sample clears the rolling regression and increments the line segment, even when the 5-hour reset timestamp remains unchanged. Repeated corrections can leave the pace card on “Collecting” and create visual gaps.
-- Live evidence during follow-up: local 5-hour allowance matches the connected Codex usage reading, with updates every few seconds. Last eight same-window samples covered approximately two minutes; corrections reset the rate segment unnecessarily.
-- Hotfix changes rate segmentation to use a changed reset boundary. Same-window corrections stay in the rolling regression.
-- Current fix branch: `fix/pace-reset-gaps`. A new Windows build completed after the code change. Do not claim a published hotfix until the branch is merged and tag v1.1.29 is released.
+- Installed CLI: `%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe`, version `0.130.0-alpha.5`.
+- Current settings select `%USERPROFILE%\.codex`; a live account read succeeded. Older `.codex-chatgpt` returned HTTP 401. Never silently switch profiles.
+- Closing stdin immediately after requests can end app-server before asynchronous responses arrive. Keep the connection open and correlate response IDs.
+- Account polling follows aggregate allowances, without per-cloud-task attribution or cloud task token totals.
+- Requires a discoverable Codex executable and existing ChatGPT sign-in. Missing CLI/service/auth must produce a clear fallback.
 
-## Relevant files
+## Relevant files and references
 
-- `codex_usage_counter.py`: `UsageHistory.rate_series`, `_current_rate`, `_render_statistics`.
-- `build.ps1`, `scripts/prepare_tk_data.py`.
+- `account_usage.py`: transport and lifecycle.
+- `codex_usage_counter.py`: `CombinedUsageReader`, `UsageSnapshot`, source labels, history.
+- `test_account_usage.py`: cloud-source regression coverage.
+- https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt
+- https://learn.chatgpt.com/docs/cloud
 
 ## RESUME HERE
 
-Publish the already built hotfix, update the installed executable, and tell the user the new release URL. Respect the build-once-publish workflow; no extra test or post-publish audit was requested.
+Complete focused account checks, verify polling with frozen/missing local telemetry, build, capture the window, and synchronize GitHub. A real cloud workload acceptance run remains unobserved.
+
+## Completed delivery
+
+- All 58 tests passed; two live account polls succeeded with an empty local sessions directory and cleaned up the child.
+- Windows build completed and installed/output hashes matched. Existing profile settings and history were preserved.
+- Generated staging files acquired read-only flags on this drive. Clear those flags only within verified build/dist trees before repeated packaging; do not reuse a stale executable after build failure.
+- Native Computer Use screenshot capture timed out. A direct Tk verification instance captured live account data using isolated history, empty local sessions, and normalized 96 DPI. This screenshot does not establish high-DPI layout acceptance.
+- Source and notes are synchronized on the cloud-usage fix branch. A dedicated cloud task acceptance run remains unobserved.
+
+## RESUME HERE - completed
+
+Implementation, regression checks, live account polling, Windows build, installed replacement, and delivery are complete. Follow up only on a new request or a cloud-task discrepancy. Cloud task token/model attribution remains unavailable through this allowance reader.

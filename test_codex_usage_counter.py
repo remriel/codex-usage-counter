@@ -90,6 +90,7 @@ class StatisticsRenderTests(unittest.TestCase):
     def test_empty_history_renders_hourly_daily_and_weekly(self):
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(app, 'TrayIcon', _QuietTray), \
+                patch.object(app, 'AccountUsageClient', return_value=Mock(snapshot=Mock(return_value=(None, None, None, 0)))), \
                 patch.object(app.AppSettings, 'load', return_value=app.AppSettings(codex_home=directory)), \
                 patch.object(app, 'history_path_for_codex_home', return_value=Path(directory) / 'empty-history.json'):
             try:
