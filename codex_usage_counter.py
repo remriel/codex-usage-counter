@@ -65,6 +65,7 @@ STATS_WIDE_MIN_WIDTH = 1100
 STATS_WIDE_CARD_COLUMNS = 6
 STATS_NARROW_CARD_COLUMNS = 4
 STATS_MIN_HOURLY_ZOOM_MINUTES = 1
+STATS_MIN_CANVAS_HEIGHT = 480
 
 COLORS = {
     "ink": "#0d1224",
@@ -2130,6 +2131,7 @@ class UsageApp:
         self.settings_window: Optional[tk.Toplevel] = None
         self.stats_window: Optional[tk.Toplevel] = None
         self.stats_canvas: Optional[tk.Canvas] = None
+        self.stats_scrollbar: Optional[tk.Scrollbar] = None
         self.stats_canvas_size = (0, 0)
         self.stats_readout: Optional[tk.Label] = None
         self.stats_context_label: Optional[tk.Label] = None
@@ -2821,19 +2823,35 @@ class UsageApp:
         )
         self.stats_readout.pack(fill="x", padx=18, pady=(0, 4))
 
+        chart_frame = tk.Frame(dialog, bg=COLORS["panel"])
+        chart_frame.pack(fill="both", expand=True)
+        chart_frame.rowconfigure(0, weight=1)
+        chart_frame.columnconfigure(0, weight=1)
         self.stats_canvas = tk.Canvas(
-            dialog,
+            chart_frame,
             bg=COLORS["panel"],
             highlightthickness=0,
             bd=0,
         )
-        self.stats_canvas.pack(fill="both", expand=True)
+        self.stats_canvas.grid(row=0, column=0, sticky="nsew")
+        self.stats_scrollbar = tk.Scrollbar(
+            chart_frame,
+            orient="vertical",
+            command=self.stats_canvas.yview,
+            bg=COLORS["panel_raised"],
+            troughcolor=COLORS["panel"],
+            activebackground=COLORS["violet"],
+            bd=0,
+            highlightthickness=0,
+        )
+        self.stats_canvas.configure(yscrollcommand=self.stats_scrollbar.set, yscrollincrement=24)
         self.stats_canvas.bind("<Button-1>", self._select_statistics_point)
         self.stats_canvas.bind("<B1-Motion>", self._select_statistics_point)
         self.stats_canvas.bind("<ButtonPress-3>", self._begin_statistics_pan)
         self.stats_canvas.bind("<B3-Motion>", self._pan_statistics)
         self.stats_canvas.bind("<ButtonRelease-3>", self._end_statistics_pan)
         self.stats_canvas.bind("<MouseWheel>", self._zoom_statistics_with_wheel)
+        self.stats_canvas.bind("<Shift-MouseWheel>", self._scroll_statistics_canvas)
         self.stats_canvas.bind("<Configure>", self._resize_statistics)
         dialog.protocol("WM_DELETE_WINDOW", self.close_statistics)
         dialog.update_idletasks()
@@ -2860,6 +2878,26 @@ class UsageApp:
             return
         self.stats_canvas_size = size
         self._render_statistics()
+
+    def _statistics_canvas_dimensions(self) -> tuple[int, int]:
+        canvas = self.stats_canvas
+        width = max(1, int(canvas.winfo_width()))
+        viewport_height = max(1, int(canvas.winfo_height()))
+        height = max(STATS_MIN_CANVAS_HEIGHT, viewport_height)
+        canvas.configure(scrollregion=(0, 0, width, height))
+        if viewport_height < height:
+            self.stats_scrollbar.grid(row=0, column=1, sticky="ns")
+        else:
+            self.stats_scrollbar.grid_remove()
+            canvas.yview_moveto(0)
+        return width, height
+
+    def _scroll_statistics_canvas(self, event: Any) -> str:
+        delta = int(getattr(event, "delta", 0))
+        if self.stats_canvas is not None and delta:
+            steps = max(1, abs(delta) // 120)
+            self.stats_canvas.yview_scroll(-steps if delta > 0 else steps, "units")
+        return "break"
 
     def set_stats_period(self, hours: float, view_end: Optional[float] = None) -> None:
         self._end_statistics_pan(None)
@@ -2975,6 +3013,8 @@ class UsageApp:
             self.set_stats_period(target, view_end=view_end)
 
     def _zoom_statistics_with_wheel(self, event: Any) -> str:
+        if self.stats_daily_view or self.stats_weekly_view:
+            return self._scroll_statistics_canvas(event)
         self.zoom_statistics(
             1 if getattr(event, "delta", 0) < 0 else -1,
             anchor_x=float(getattr(event, "x", (self.stats_plot_left + self.stats_plot_right) / 2)),
@@ -3042,6 +3082,7 @@ class UsageApp:
                 pass
         self.stats_window = None
         self.stats_canvas = None
+        self.stats_scrollbar = None
         self.stats_canvas_size = (0, 0)
         self.stats_readout = None
         self.stats_context_label = None
@@ -3556,9 +3597,9 @@ class UsageApp:
     def _statistics_pane_geometry(self, canvas_height: int, plot_top: float = STATS_PLOT_TOP) -> dict[str, float]:
         """Lay out the three linked Statistics panes within the available canvas."""
 
-        plot_bottom = float(max(620, canvas_height - 34))
+        plot_bottom = float(canvas_height - 34)
         pane_gap = 16.0
-        pane_header = 16.0
+        pane_header = 24.0
         available_height = plot_bottom - plot_top
         token_pane_height = max(72.0, available_height * 0.20)
         primary_height = available_height - token_pane_height - pane_gap * 2
@@ -3844,8 +3885,7 @@ class UsageApp:
         if canvas is None:
             return
         canvas.delete("all")
-        canvas_width = max(640, int(canvas.winfo_width()))
-        canvas_height = max(560, int(canvas.winfo_height()))
+        canvas_width, canvas_height = self._statistics_canvas_dimensions()
         is_weekly = self.stats_weekly_view
         interval_name = "WEEKLY" if is_weekly else "DAILY"
         interval_label = "week" if is_weekly else "day"
@@ -3929,7 +3969,7 @@ class UsageApp:
         start_time = range_start.timestamp()
         end_time = range_end.timestamp()
         span = max(1.0, end_time - start_time)
-        left, right = 58, max(250, canvas_width - 72)
+        left, right = 80, max(250, canvas_width - 72)
         self.stats_plot_start = start_time
         self.stats_plot_end = end_time
         self.stats_plot_left = left
@@ -4240,8 +4280,7 @@ class UsageApp:
             self._render_daily_statistics()
             return
         canvas.delete("all")
-        canvas_width = max(640, int(canvas.winfo_width()))
-        canvas_height = max(560, int(canvas.winfo_height()))
+        canvas_width, canvas_height = self._statistics_canvas_dimensions()
 
         now = time.time()
         end_time = min(self.stats_view_end or now, now)
