@@ -2,29 +2,28 @@
 
 Objective: Publish Codex Usage Counter v1.2.1 with the verified 175% Windows display scaling fix.
 
-Progress: [##--------] 20% - release scope confirmed and version updated.
+Progress: [########--] 80% - PR merged, release tests passed, versioned executable built and installed.
 
 - [x] Reconcile project notes, clean git state, PR #41, and existing releases.
 - [x] Set APP_VERSION to 1.2.1.
-- [ ] Run application and Tcl/Tk packaging tests.
-- [ ] Push release preparation and merge PR #41.
-- [ ] Build the Windows release executable from main.
+- [x] Run application and Tcl/Tk packaging tests.
+- [x] Push release preparation and merge PR #41.
+- [x] Build the Windows release executable from main.
 - [ ] Tag v1.2.1 and create the source archive from that tag.
 - [ ] Publish GitHub release with executable and source assets.
 - [ ] Verify published asset hashes and update the local installation.
 - [ ] Synchronize final documentation and copy it to outputs.
 
-Implementation: existing verified Statistics viewport fix; only version metadata changes for this release. Current branch is fix/statistics-dpi-scaling. Latest published release remains v1.2.0.
+Implementation: PR #41 merged into main as c5d3af5. APP_VERSION is 1.2.1. Release executable contains that version (verified from its embedded Python archive). Latest published release remains v1.2.0 until the pending publication step.
 
 Blockers: none.
 
-Verification: previous fix passed 59 application tests and 7 packaging tests, plus screenshots at actual 175% scaling. Release-specific checks pending after version update.
+Verification: 59 application tests and 7 packaging tests passed after the version update. build.ps1 -SkipAssetGeneration succeeded after clearing read-only flags on validated generated files AND directories. Packaged version constant verified as 1.2.1. Executable is 15,223,625 bytes, SHA-256 9D6D9399059A2C4E69766FD9FCAF2A91E156471AAA4A9B8D3B918535EA37E044. Installed executable matches the build, retains the normal packaged parent/child process pair, and settings hash is unchanged. Previous untagged DPI build is backed up in outputs.
 
 Next steps:
-1. Run tests, commit release preparation, and push.
-2. Merge PR #41 and build the versioned executable from main.
-3. Tag, archive, publish, verify assets, and update the installed executable.
-4. Record completion and deliver release and continuity links.
+1. Commit release build evidence, tag v1.2.1, and archive that tag.
+2. Publish the GitHub release and verify executable/source asset digests.
+3. Record completion and deliver release and continuity links.
 
 ## Previous DPI fix delivery
 

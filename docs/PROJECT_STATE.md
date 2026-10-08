@@ -58,6 +58,6 @@
 
 ## RESUME HERE
 
-October 8: user explicitly requested publication of the release. Prepare v1.2.1, merge PR #41, rebuild with APP_VERSION=1.2.1, tag the source, publish executable/source assets, verify their hashes, and update the local installation. The DPI implementation is already verified; current source edits are version metadata and release progress only. PR #41 is open and mergeable, branch fix/statistics-dpi-scaling was clean at 637b9a9 before release preparation.
+October 8 release work: PR #41 merged into main as c5d3af5. APP_VERSION=1.2.1; 59 application + 7 packaging tests pass. Versioned executable built and installed, SHA-256 9D6D9399059A2C4E69766FD9FCAF2A91E156471AAA4A9B8D3B918535EA37E044 (15,223,625 bytes). Embedded version verified, settings preserved, previous untagged DPI executable backed up. Remaining: commit release build evidence, tag/archive v1.2.1, publish both GitHub assets, verify digests, and synchronize final docs.
 
 v1.2.0 remains the latest published release. Per-cloud-task token totals and model attribution are unavailable through account allowance polling.
