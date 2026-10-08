@@ -2,7 +2,7 @@
 
 Objective: Fix Statistics being cut off at 175% Windows display scaling, verify the three views, build the corrected executable, and synchronize the fix with GitHub.
 
-Progress: [#########-] 90% - verified build installed and running; GitHub synchronization and final handoff pending.
+Progress: [##########] 100% - verified fix installed and running; source synchronized in PR #41; deliverables complete.
 
 - [x] Locate and clone remriel/codex-usage-counter; confirm clean main at 52196f2.
 - [x] Read project notes and reconcile them with source and git state.
@@ -13,8 +13,8 @@ Progress: [#########-] 90% - verified build installed and running; GitHub synchr
 - [x] Verify Hourly, Daily, Weekly, selection, zoom, and panning.
 - [x] Run regression tests and build the Windows executable.
 - [x] Back up v1.2.0 and install the fixed build in the existing application location.
-- [ ] Push the fix and open a pull request.
-- [ ] Deliver executable, screenshots, and final continuity documents.
+- [x] Push the fix and open a pull request.
+- [x] Deliver executable, screenshots, source archive, and final continuity documents.
 
 Implementation: branch fix/statistics-dpi-scaling. Renderers use the actual canvas height, with a 480-pixel scrollable fallback on short screens. A 24-pixel pane header separates titles from chart ticks. Daily/Weekly axis margins keep pace labels inside the canvas.
 Blockers: none.
@@ -24,10 +24,13 @@ Build: build.ps1 -SkipAssetGeneration completed with Python 3.14.7 / Tk 9.0.4 / 
 
 Installation: C:\Users\Gev\AppData\Local\Programs\CodexUsageCounter\CodexUsageCounter.exe. Installed hash matches the output executable and source build. Normal parent/child processes are alive, the Tk window responds, and live allowance data appears in the window title. Settings hash is unchanged. The error log has no new entries. Previous v1.2.0 executable is backed up in task outputs. This is a maintenance build from the fix branch; no new release tag has been published.
 
+GitHub: https://github.com/remriel/codex-usage-counter/pull/41 (open, ready for review). Implementation commit: 2e6ec1f. The branch is synchronized with origin. Main and the latest published release remain at v1.2.0 pending PR review and a future release.
+
+Deliverables in the October 7 task outputs: CodexUsageCounter.exe, CodexUsageCounter-dpi-fix-source.zip, statistics-after-hourly-175.png, statistics-after-daily-175.png, statistics-after-weekly-175.png, PROGRESS.md, PROJECT_STATE.md, and the previous executable backup. Before-fix screenshots are also retained for comparison.
+
 Next steps:
-1. Commit and push fix/statistics-dpi-scaling, then open a pull request.
-2. Record the pull request and final state in the continuity documents.
-3. Copy the continuity documents to outputs and deliver the executable and screenshot links.
+1. No implementation, build, installation, or verification work remains for this request.
+2. Review/merge PR #41 and publish a new maintenance release only when requested.
 
 ## Previous release (v1.2.0)
 

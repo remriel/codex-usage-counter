@@ -44,18 +44,20 @@
 - Installed at `C:\Users\Gev\AppData\Local\Programs\CodexUsageCounter\CodexUsageCounter.exe`, hash matches build/delivery. Settings hash unchanged; existing history files remain in place. Packaged parent/child processes and its app-server child are alive, the window responds, and live allowances are shown. Error log has no new entries.
 - Backup executable in task outputs has the original v1.2.0 hash `EFEBD0EEC5EA5B211488A3F11F8872D20EDAF3CD0CBCE0D20EC41D3535D4E372`.
 - No new version tag or release has been published. Source version metadata remains 1.2.0 while the fix branch is prepared for review.
+- Fix source is synchronized on `fix/statistics-dpi-scaling` in https://github.com/remriel/codex-usage-counter/pull/41 (open, ready for review). Implementation commit is `2e6ec1f`; later completion commits update handoff documentation only. Main has not been merged by this task.
+- Delivery outputs contain the executable, source archive, actual-175%-scaling before/after screenshots for all three views, and copies of these continuity documents. The screenshots use synthetic data rather than private usage history.
 
 ## Published release v1.2.0
 
 - Release page: https://github.com/remriel/codex-usage-counter/releases/tag/v1.2.0
 - Executable: `CodexUsageCounter.exe`, 15,222,715 bytes, SHA-256 `EFEBD0EEC5EA5B211488A3F11F8872D20EDAF3CD0CBCE0D20EC41D3535D4E372`.
 - Source: `CodexUsageCounter-source-v1.2.0.zip`, generated from tag v1.2.0 (commit c1b467e), SHA-256 `4833A16821CAD1461246B02BD8E164727CDC5F3A52AA56701F8A09F0D3BD6E92`.
-- The release is marked latest. The installed executable has the same SHA-256 as the published EXE. Settings and usage history were preserved.
+- The release is marked latest. At release time the installed executable had the same SHA-256 as the published EXE. The October 7 maintenance build above now replaces that local installation. Settings and usage history were preserved.
 - Verification: 58 tests passed; two live account reads updated allowances with zero local session files and cleaned up the app-server child. Release assets verified through GitHub.
 - Screenshot: `outputs/cloud-counter.png`. Captured from the app UI at 96 DPI with live account data and isolated empty local sessions.
 
 ## RESUME HERE
 
-Current objective: fix Statistics clipping at 175% Windows scaling. The fix is implemented, verified (59 application + 7 packaging tests), built, installed, and running with live allowance data. Work is on `fix/statistics-dpi-scaling`, based on main 52196f2. Settings are preserved, installed and delivery hashes match, and actual 175% screenshots show complete chart content. Remaining: commit/push, open and record a reviewable PR, and copy final handoff documents to task outputs.
+The 175% Windows scaling fix is complete: implemented, verified (59 application + 7 packaging tests), built, installed, running with live allowance data, and synchronized in PR #41. Branch: `fix/statistics-dpi-scaling`, based on main 52196f2; implementation commit 2e6ec1f. Settings are preserved, installed and delivery hashes match, and actual 175% screenshots show complete chart content. No work remains for this request. Resume for PR review/merge, publication of a new release, or a newly reported issue. No new release tag has been published by this task.
 
 v1.2.0 remains the latest published release. Per-cloud-task token totals and model attribution are unavailable through account allowance polling.
