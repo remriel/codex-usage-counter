@@ -83,6 +83,8 @@ python .\codex_usage_counter.py
 
 The source app uses Python’s built-in Tk interface and Windows APIs for the tray icon. It has no third-party runtime dependency.
 
+Statistics fits its charts to the available screen space, including at 175% Windows display scaling. On shorter screens, a vertical scrollbar keeps every chart accessible. The Hourly mouse wheel still zooms the timeline; Shift + mouse wheel scrolls vertically. Daily and Weekly use the mouse wheel for vertical scrolling.
+
 Run the synthetic telemetry regression tests with `python -m unittest -v`. These cover model labels, invalid telemetry, swapped allowance windows, and session discovery. Discovery retains only the 48 newest candidates and skips files that disappear mid-scan. Frequent reads reuse candidates and check today/yesterday folders; full recursive discovery runs every 30 seconds. Newer downward quota corrections are accepted instead of being permanently clamped to a prior maximum. Unchanged or hidden Statistics views and a hidden main canvas avoid unnecessary redraws. Stale telemetry removes the numeric tray icon and labels the tooltip STALE.
 
 ## Build a standalone executable

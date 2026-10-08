@@ -87,6 +87,86 @@ class _QuietTray:
 
 @unittest.skipUnless(os.name == 'nt', 'Tk statistics view is Windows-only')
 class StatisticsRenderTests(unittest.TestCase):
+    def test_scaled_fullscreen_views_keep_every_pane_and_axis_visible(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(app, 'TrayIcon', _QuietTray), \
+                patch.object(app, 'CombinedUsageReader', return_value=Mock(codex_home=Path(directory))), \
+                patch.object(app.UsageApp, 'refresh_async'), \
+                patch.object(app.UsageApp, '_watch_local_signal'), \
+                patch.object(app.AppSettings, 'load', return_value=app.AppSettings(codex_home=directory)), \
+                patch.object(app, 'history_path_for_codex_home', return_value=Path(directory) / 'history.json'):
+            counter = app.UsageApp()
+            now = app.time.time()
+            counter.history.points = [
+                {'timestamp': now - (12 - index) * 300, 'used_percent': 20 + index / 10,
+                 'five_hour_used_percent': 30 + index, 'resets_at': now + 100000,
+                 'five_hour_resets_at': now + 5000, 'total_tokens': 1000 * index,
+                 'session_id': 'dpi-fixture'}
+                for index in range(13)
+            ]
+            counter.snapshot = app.UsageSnapshot(timestamp=now, used_percent=21.2, five_hour_used_percent=42)
+
+            def settle_window():
+                ready = app.tk.BooleanVar(counter.root, value=False)
+                counter.root.after(50, ready.set, True)
+                counter.root.wait_variable(ready)
+                counter.root.update_idletasks()
+
+            try:
+                settle_window()
+                counter.open_statistics()
+                dialog = counter.stats_window
+                dialog.attributes('-fullscreen', False)
+                dialog.maxsize(3000, 2000)
+                # Effective screen sizes for a 1080p display at 100% through 200%.
+                for width, height in ((1920, 1080), (1536, 864), (1280, 720), (1097, 617), (960, 540)):
+                    dialog.geometry(f'{width}x{height}+0+0')
+                    settle_window()
+                    self.assertEqual((dialog.winfo_width(), dialog.winfo_height()), (width, height))
+                    for change in (counter.set_stats_hourly, counter.set_stats_daily, counter.set_stats_weekly):
+                        with self.subTest(screen=(width, height), view=change.__name__):
+                            change()
+                            settle_window()
+                            counter._render_statistics()
+                            canvas = counter.stats_canvas
+                            bounds = canvas.bbox('all')
+                            self.assertGreaterEqual(bounds[0], 0)
+                            self.assertGreaterEqual(bounds[1], 0)
+                            self.assertLessEqual(bounds[2], canvas.winfo_width())
+                            self.assertLessEqual(bounds[3], max(app.STATS_MIN_CANVAS_HEIGHT, canvas.winfo_height()))
+                            for pane in ('usage', 'rate', 'token'):
+                                box = canvas.coords(f'stats-{pane}-pane')
+                                self.assertGreater(box[3], box[1])
+                                self.assertLess(box[3], max(app.STATS_MIN_CANVAS_HEIGHT, canvas.winfo_height()))
+                            if canvas.winfo_height() >= app.STATS_MIN_CANVAS_HEIGHT:
+                                self.assertFalse(counter.stats_scrollbar.winfo_manager())
+                                self.assertEqual(canvas.yview(), (0.0, 1.0))
+                            else:
+                                self.assertEqual(counter.stats_scrollbar.winfo_manager(), 'grid')
+                                canvas.yview_moveto(0)
+                                canvas.event_generate('<Shift-MouseWheel>', delta=-120)
+                                self.assertGreater(canvas.yview()[0], 0)
+                                canvas.yview_moveto(1)
+                                self.assertEqual(canvas.yview()[1], 1.0)
+                            selected = counter.stats_plot_points[0]
+                            selected_x = selected.get('_plot_x', counter.stats_plot_left)
+                            canvas.event_generate('<Button-1>', x=int(selected_x), y=20)
+                            canvas.event_generate('<ButtonRelease-1>', x=int(selected_x), y=20)
+                            self.assertEqual(counter.stats_selected_timestamp, selected['timestamp'])
+                counter.set_stats_hourly()
+                x = int((counter.stats_plot_left + counter.stats_plot_right) / 2)
+                canvas.event_generate('<MouseWheel>', delta=120, x=x)
+                self.assertEqual(counter.stats_period_hours, 0.5)
+                canvas.event_generate('<ButtonPress-3>', x=x, y=20)
+                canvas.event_generate('<B3-Motion>', x=x + 40, y=20)
+                canvas.event_generate('<ButtonRelease-3>', x=x + 40, y=20)
+                self.assertIsNotNone(counter.stats_view_end)
+                self.assertLess(counter.stats_view_end, now)
+                self.assertIsNone(counter.stats_pan_redraw_id)
+            finally:
+                counter.close_statistics()
+                counter.root.destroy()
+
     def test_empty_history_renders_hourly_daily_and_weekly(self):
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(app, 'TrayIcon', _QuietTray), \
