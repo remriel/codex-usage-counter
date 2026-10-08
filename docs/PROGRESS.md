@@ -2,28 +2,32 @@
 
 Objective: Publish Codex Usage Counter v1.2.1 with the verified 175% Windows display scaling fix.
 
-Progress: [########--] 80% - PR merged, release tests passed, versioned executable built and installed.
+Progress: [##########] 100% - v1.2.1 published as latest, assets verified, and matching executable installed.
 
 - [x] Reconcile project notes, clean git state, PR #41, and existing releases.
 - [x] Set APP_VERSION to 1.2.1.
 - [x] Run application and Tcl/Tk packaging tests.
 - [x] Push release preparation and merge PR #41.
 - [x] Build the Windows release executable from main.
-- [ ] Tag v1.2.1 and create the source archive from that tag.
-- [ ] Publish GitHub release with executable and source assets.
-- [ ] Verify published asset hashes and update the local installation.
-- [ ] Synchronize final documentation and copy it to outputs.
+- [x] Tag v1.2.1 and create the source archive from that tag.
+- [x] Publish GitHub release with executable and source assets.
+- [x] Verify published asset hashes and update the local installation.
+- [x] Synchronize final documentation and copy it to outputs.
 
-Implementation: PR #41 merged into main as c5d3af5. APP_VERSION is 1.2.1. Release executable contains that version (verified from its embedded Python archive). Latest published release remains v1.2.0 until the pending publication step.
+Implementation: PR #41 merged into main as c5d3af5. APP_VERSION is 1.2.1. Release executable contains that version (verified from its embedded Python archive). Tag v1.2.1 points to 9d8c333671999bc2ba27fd116ec4318fee230e7c. GitHub confirms v1.2.1 is the latest public, non-prerelease release.
 
 Blockers: none.
 
 Verification: 59 application tests and 7 packaging tests passed after the version update. build.ps1 -SkipAssetGeneration succeeded after clearing read-only flags on validated generated files AND directories. Packaged version constant verified as 1.2.1. Executable is 15,223,625 bytes, SHA-256 9D6D9399059A2C4E69766FD9FCAF2A91E156471AAA4A9B8D3B918535EA37E044. Installed executable matches the build, retains the normal packaged parent/child process pair, and settings hash is unchanged. Previous untagged DPI build is backed up in outputs.
 
+Release: https://github.com/remriel/codex-usage-counter/releases/tag/v1.2.1
+
+Published executable: CodexUsageCounter.exe, 15,223,625 bytes, SHA-256 9D6D9399059A2C4E69766FD9FCAF2A91E156471AAA4A9B8D3B918535EA37E044.
+Published source: CodexUsageCounter-source-v1.2.1.zip, 2,073,440 bytes, SHA-256 A58ABFD5C31A8F0521A18F093C0E75AB653A91EA3FDCA00FDCCC8E94EC9FEEC7.
+Both GitHub asset digests match the local files. The source archive is generated from the immutable release tag; final publication notes are recorded in a later documentation-only commit on main.
+
 Next steps:
-1. Commit release build evidence, tag v1.2.1, and archive that tag.
-2. Publish the GitHub release and verify executable/source asset digests.
-3. Record completion and deliver release and continuity links.
+1. No release work remains. Resume only for a new request or a reported issue.
 
 ## Previous DPI fix delivery
 

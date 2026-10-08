@@ -24,7 +24,8 @@
 - The account reader needs a discoverable Codex executable and a signed-in selected profile.
 - Generated `build` and `dist` files can be read-only on this drive. Before a rebuild, resolve and validate those directories under the repository, reject reparse points, and clear only read-only flags inside those generated trees.
 - PR #40 merged to main as 847b91d. Release v1.2.0 is tagged at c1b467e.
-- The v1.2.0 release build matched the published asset before the October 7 DPI fix. The currently installed executable is the verified maintenance build recorded below.
+- The currently installed executable matches the published v1.2.1 asset. The earlier untagged DPI build and v1.2.0 executable are backed up in task outputs.
+- Generated Tcl/Tk directories can also have read-only flags: clearing files alone failed at an Argentina timezone directory. Validate generated paths, reject reparse points, and clear the read-only flag on both files and directories before rebuilding.
 
 ## Relevant files
 
@@ -52,12 +53,22 @@
 - Release page: https://github.com/remriel/codex-usage-counter/releases/tag/v1.2.0
 - Executable: `CodexUsageCounter.exe`, 15,222,715 bytes, SHA-256 `EFEBD0EEC5EA5B211488A3F11F8872D20EDAF3CD0CBCE0D20EC41D3535D4E372`.
 - Source: `CodexUsageCounter-source-v1.2.0.zip`, generated from tag v1.2.0 (commit c1b467e), SHA-256 `4833A16821CAD1461246B02BD8E164727CDC5F3A52AA56701F8A09F0D3BD6E92`.
-- The release is marked latest. At release time the installed executable had the same SHA-256 as the published EXE. The October 7 maintenance build above now replaces that local installation. Settings and usage history were preserved.
+- This was the latest release before v1.2.1. At release time the installed executable had the same SHA-256 as the published EXE. The October 8 v1.2.1 release now replaces that local installation. Settings and usage history were preserved.
 - Verification: 58 tests passed; two live account reads updated allowances with zero local session files and cleaned up the app-server child. Release assets verified through GitHub.
 - Screenshot: `outputs/cloud-counter.png`. Captured from the app UI at 96 DPI with live account data and isolated empty local sessions.
 
+## Published release v1.2.1
+
+- Release: https://github.com/remriel/codex-usage-counter/releases/tag/v1.2.1 (latest, public, non-prerelease).
+- PR #41 merged into main at c5d3af5; release tag v1.2.1 points to 9d8c333671999bc2ba27fd116ec4318fee230e7c.
+- Executable: CodexUsageCounter.exe, 15,223,625 bytes, SHA-256 9D6D9399059A2C4E69766FD9FCAF2A91E156471AAA4A9B8D3B918535EA37E044.
+- Source: CodexUsageCounter-source-v1.2.1.zip, 2,073,440 bytes, SHA-256 A58ABFD5C31A8F0521A18F093C0E75AB653A91EA3FDCA00FDCCC8E94EC9FEEC7. Generated directly from the release tag.
+- Both GitHub asset digests match the local files. Installed executable matches the published executable; settings hash is unchanged and history files remain in place. Packaged parent/child processes remain alive and responsive.
+- APP_VERSION=1.2.1 confirmed in the frozen executable's embedded Python archive. All 59 application tests and 7 packaging tests pass. Build reuses the approved visual/audio assets and stages Tcl/Tk libraries.
+- Release files and final continuity documents are in task outputs. Source tag contains the pre-publication build record; publication completion is recorded afterward on main.
+
 ## RESUME HERE
 
-October 8 release work: PR #41 merged into main as c5d3af5. APP_VERSION=1.2.1; 59 application + 7 packaging tests pass. Versioned executable built and installed, SHA-256 9D6D9399059A2C4E69766FD9FCAF2A91E156471AAA4A9B8D3B918535EA37E044 (15,223,625 bytes). Embedded version verified, settings preserved, previous untagged DPI executable backed up. Remaining: commit release build evidence, tag/archive v1.2.1, publish both GitHub assets, verify digests, and synchronize final docs.
+v1.2.1 is complete, published as latest, and installed. PR #41 is merged. Release tag and executable/source digests are recorded above; installed executable matches the published asset and settings are preserved. No release work remains. Resume only for a new request or a reported regression.
 
-v1.2.0 remains the latest published release. Per-cloud-task token totals and model attribution are unavailable through account allowance polling.
+Per-cloud-task token totals and model attribution remain unavailable through account allowance polling.
