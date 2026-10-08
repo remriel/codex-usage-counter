@@ -58,6 +58,6 @@
 
 ## RESUME HERE
 
-The 175% Windows scaling fix is complete: implemented, verified (59 application + 7 packaging tests), built, installed, running with live allowance data, and synchronized in PR #41. Branch: `fix/statistics-dpi-scaling`, based on main 52196f2; implementation commit 2e6ec1f. Settings are preserved, installed and delivery hashes match, and actual 175% screenshots show complete chart content. No work remains for this request. Resume for PR review/merge, publication of a new release, or a newly reported issue. No new release tag has been published by this task.
+October 8: user explicitly requested publication of the release. Prepare v1.2.1, merge PR #41, rebuild with APP_VERSION=1.2.1, tag the source, publish executable/source assets, verify their hashes, and update the local installation. The DPI implementation is already verified; current source edits are version metadata and release progress only. PR #41 is open and mergeable, branch fix/statistics-dpi-scaling was clean at 637b9a9 before release preparation.
 
 v1.2.0 remains the latest published release. Per-cloud-task token totals and model attribution are unavailable through account allowance polling.

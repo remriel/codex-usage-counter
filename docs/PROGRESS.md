@@ -1,5 +1,33 @@
 # Current progress
 
+Objective: Publish Codex Usage Counter v1.2.1 with the verified 175% Windows display scaling fix.
+
+Progress: [##--------] 20% - release scope confirmed and version updated.
+
+- [x] Reconcile project notes, clean git state, PR #41, and existing releases.
+- [x] Set APP_VERSION to 1.2.1.
+- [ ] Run application and Tcl/Tk packaging tests.
+- [ ] Push release preparation and merge PR #41.
+- [ ] Build the Windows release executable from main.
+- [ ] Tag v1.2.1 and create the source archive from that tag.
+- [ ] Publish GitHub release with executable and source assets.
+- [ ] Verify published asset hashes and update the local installation.
+- [ ] Synchronize final documentation and copy it to outputs.
+
+Implementation: existing verified Statistics viewport fix; only version metadata changes for this release. Current branch is fix/statistics-dpi-scaling. Latest published release remains v1.2.0.
+
+Blockers: none.
+
+Verification: previous fix passed 59 application tests and 7 packaging tests, plus screenshots at actual 175% scaling. Release-specific checks pending after version update.
+
+Next steps:
+1. Run tests, commit release preparation, and push.
+2. Merge PR #41 and build the versioned executable from main.
+3. Tag, archive, publish, verify assets, and update the installed executable.
+4. Record completion and deliver release and continuity links.
+
+## Previous DPI fix delivery
+
 Objective: Fix Statistics being cut off at 175% Windows display scaling, verify the three views, build the corrected executable, and synchronize the fix with GitHub.
 
 Progress: [##########] 100% - verified fix installed and running; source synchronized in PR #41; deliverables complete.
