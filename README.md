@@ -1,5 +1,7 @@
 # Codex Usage Counter
 
+![Codex Usage Counter on Windows with usage limits and reset countdowns](screenshots/counter.png)
+
 Current release: **v1.2.0**
 
 A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, reset countdowns, and token activity.
