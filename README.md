@@ -2,13 +2,11 @@
 
 ![Codex Usage Counter on Windows with usage limits and reset countdowns](screenshots/counter.png)
 
-Current release: **v1.2.0**
+**[Download the latest Windows app](https://github.com/remriel/codex-usage-counter/releases/latest)** · [Screenshots](#screenshots) · [Usage details](#what-it-does)
 
 A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, reset countdowns, and token activity.
 
 **Cloud tracking:** Account allowances are refreshed every 15 seconds through your installed Codex app-server, including usage from Codex Cloud. Keep the counter running on Windows and keep Codex signed in to the selected profile. Local JSONL telemetry remains available as a fallback.
-
-[Download the latest Windows release](../../releases/latest)
 
 ## What it does
 
@@ -111,3 +109,8 @@ After building, run:
 ```
 
 Use `-Remove` to remove the current-user Startup shortcut.
+
+## Other Windows tools
+
+- [Presence](https://github.com/remriel/presence-windows): local-network device discovery and arrival/departure monitoring.
+- [Ovo Timer](https://github.com/remriel/ovo-timer-android): an interactive countdown timer for Windows and Android.
