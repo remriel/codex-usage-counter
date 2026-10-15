@@ -100,4 +100,4 @@ The October 14 bug/performance implementation is complete in open, ready-for-rev
 
 ## RESUME HERE
 
-v1.2.2 release preparation is active. Follow docs/PROGRESS.md, verify repository and GitHub state before retrying any publication, and avoid duplicate tags/releases.
+v1.2.2 is built and verified; publication is next. All 72 application and seven packaging tests pass. Executable: 15253521 bytes, SHA-256 C20DD898174AB0E50A128CC08D3D4292BA777CF7C555C00523B3C6B00B1C3BE7. Packaged APP_VERSION=1.2.2, hot-path bytecode, and Tcl/Tk assets are confirmed. The first release test attempt hit transient Windows geometry settling; the complete rerun passed. Generated Tcl/Tk files and directories needed their read-only flags cleared after resolved-path and reparse-point checks. The release executable was rebuilt from main after the version change. Follow docs/PROGRESS.md, verify repository and GitHub state before retrying any publication, and avoid duplicate tags/releases.

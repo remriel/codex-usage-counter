@@ -2,17 +2,17 @@
 
 Objective: Publish Codex Usage Counter v1.2.2 (October 15, 2026).
 
-Progress: [####------] 40% — PR #42 merged; release version set; verification and build next.
+Progress: [########--] 80% — all 79 tests pass; v1.2.2 executable built and verified; publication next.
 
 - [x] Reconcile clean Git state, PR #42, and latest release v1.2.1.
 - [x] Merge PR #42 into main (a8f8e08).
 - [x] Set APP_VERSION to 1.2.2.
-- [ ] Run all application and packaging tests.
-- [ ] Build the executable and verify embedded version, hot-path code, and Tcl/Tk assets.
+- [x] Run all application and packaging tests.
+- [x] Build the executable and verify embedded version, hot-path code, and Tcl/Tk assets.
 - [ ] Tag the exact source, generate source ZIP, and publish GitHub release assets.
 - [ ] Verify remote asset hashes and synchronize final continuity documents.
 
-Current implementation: main includes the verified correctness/performance fixes.
+Current implementation: main includes the verified correctness/performance fixes. The frozen executable contains APP_VERSION=1.2.2, the hot-path bytecode matches source, and Tcl/Tk data is present. Build: 15253521 bytes, SHA-256 C20DD898174AB0E50A128CC08D3D4292BA777CF7C555C00523B3C6B00B1C3BE7.
 Blockers: none. Use task-local work/build_review.py with isolated PyInstaller 6.22.3.
 The release request authorizes publication; no local installation change is requested.
 
