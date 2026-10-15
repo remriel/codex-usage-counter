@@ -1,5 +1,31 @@
 # Current progress
 
+Objective: Fix reproduced bugs and optimize Codex Usage Counter performance (October 14, 2026).
+
+Progress: [#########-] 90% — implementation and all 79 checks pass; GitHub delivery and Windows packaging underway.
+
+- [x] Reconcile clean main fef6a1b, project notes, and GitHub issues.
+- [x] Capture baseline performance and reproduce bugs with isolated synthetic fixtures.
+- [x] Implement bounded history updates, incremental telemetry reads, metadata ordering, timestamp validation, atomic persistence, and resilient process cleanup.
+- [x] Add 13 regressions and verify all 72 application tests plus seven Tcl/Tk packaging tests; no skips.
+- [x] Benchmark final implementation and save docs/PERFORMANCE.md.
+- [ ] Synchronize the fix branch and open/attach a GitHub pull request.
+- [ ] Complete Windows packaging and deliver source, evidence, and continuity files.
+
+Current implementation: fix/usage-correctness-performance. Existing release metadata remains 1.2.1.
+Blockers: no source blockers; packaging required isolated PyInstaller dependencies and an explicit task-local wrapper.
+Verification: python -m unittest discover -v; python -m unittest discover -s scripts -p test_*.py -v; python scripts/benchmark_usage.py; git diff --check.
+Performance: 43,200 history points, median five runs; record 877.343 -> 0.274 ms (JSON writes excluded); appended telemetry 560.018 -> 1.141 ms. Full evidence is in docs/PERFORMANCE.md.
+
+Next steps:
+1. Publish source changes to the fix branch and attach its PR.
+2. Complete and inspect the Windows executable, or record the precise packaging limitation.
+3. Save source archive, benchmark/test evidence, PROGRESS.md, and PROJECT_STATE.md in task outputs.
+
+# Previous work (historical)
+
+# Current progress
+
 Objective: Publish Codex Usage Counter v1.2.1 with the verified 175% Windows display scaling fix.
 
 Progress: [##########] 100% - v1.2.1 published as latest, assets verified, and matching executable installed.

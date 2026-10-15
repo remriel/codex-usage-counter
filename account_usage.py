@@ -153,14 +153,20 @@ class AccountUsageClient:
             process.terminate()
             process.wait(timeout=2)
         except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=2)
+            try:
+                process.kill()
+                process.wait(timeout=2)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
         except OSError:
             pass
         finally:
             for stream in (process.stdin, process.stdout):
                 if stream:
-                    stream.close()
+                    try:
+                        stream.close()
+                    except (OSError, ValueError):
+                        pass
 
     def _run(self) -> None:
         failures = 0

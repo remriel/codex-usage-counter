@@ -13,6 +13,7 @@ import queue
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -262,7 +263,7 @@ def parse_timestamp(value: Any) -> Optional[float]:
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.timestamp()
-    except ValueError:
+    except (OSError, OverflowError, ValueError):
         return None
 
 
@@ -379,23 +380,35 @@ class AppSettings:
 
     def save(self) -> None:
         try:
-            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            CONFIG_FILE.write_text(
-                json.dumps(
-                    {
-                        "display_mode": self.display_mode,
-                        "always_on_top": self.always_on_top,
-                        "start_with_windows": self.start_with_windows,
-                        "sound_alert": self.sound_alert,
-                        "milestone_step": self.milestone_step,
-                        "milestone_duration": self.milestone_duration,
-                        "codex_home": self.codex_home,
-                    },
-                    indent=2,
-                ),
-                encoding="utf-8",
+            write_json_atomic(
+                CONFIG_FILE,
+                {
+                    "display_mode": self.display_mode,
+                    "always_on_top": self.always_on_top,
+                    "start_with_windows": self.start_with_windows,
+                    "sound_alert": self.sound_alert,
+                    "milestone_step": self.milestone_step,
+                    "milestone_duration": self.milestone_duration,
+                    "codex_home": self.codex_home,
+                },
             )
         except OSError:
+            pass
+
+
+def write_json_atomic(path: Path, payload: Any) -> None:
+    """Keep the last complete settings/history file if writing is interrupted."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload, separators=(",", ":"), allow_nan=False))
+        os.replace(temporary, path)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
             pass
 
 
@@ -413,19 +426,19 @@ class UsageHistory:
     def _point(item: Any) -> Optional[dict[str, Any]]:
         if not isinstance(item, dict):
             return None
-        timestamp = number(item.get("timestamp"))
+        timestamp = parse_timestamp(item.get("timestamp"))
         used_percent = number(item.get("used_percent"))
         if timestamp is None or used_percent is None or not math.isfinite(timestamp) or not math.isfinite(used_percent):
             return None
         point: dict[str, Any] = {"timestamp": timestamp, "used_percent": clamp(used_percent, 0, 100)}
-        resets_at = number(item.get("resets_at"))
+        resets_at = parse_timestamp(item.get("resets_at"))
         window_minutes = number(item.get("window_minutes"))
         if resets_at is not None and math.isfinite(resets_at):
             point["resets_at"] = resets_at
         if window_minutes is not None and math.isfinite(window_minutes) and window_minutes > 0:
             point["window_minutes"] = window_minutes
         five_hour_used = number(item.get("five_hour_used_percent"))
-        five_hour_resets = number(item.get("five_hour_resets_at"))
+        five_hour_resets = parse_timestamp(item.get("five_hour_resets_at"))
         five_hour_minutes = number(item.get("five_hour_window_minutes"))
         if five_hour_used is not None and math.isfinite(five_hour_used):
             point["five_hour_used_percent"] = clamp(five_hour_used, 0, 100)
@@ -531,7 +544,8 @@ class UsageHistory:
                 if not cls._different_limit_window(previous, point):
                     deadline = point["timestamp"] + recovery_seconds
                     recovered = False
-                    for future in ordered[index + 1 :]:
+                    for future_index in range(index + 1, len(ordered)):
+                        future = ordered[future_index]
                         if future["timestamp"] > deadline or cls._different_limit_window(previous, future):
                             break
                         if future["used_percent"] >= previous["used_percent"]:
@@ -554,11 +568,11 @@ class UsageHistory:
         return cls._sanitize(payload)
 
     def record(self, snapshot: UsageSnapshot) -> None:
-        if snapshot.used_percent is None or snapshot.is_stale:
+        if number(snapshot.used_percent) is None or snapshot.is_stale:
             return
         now = time.time()
         timestamp = snapshot.timestamp if snapshot.timestamp is not None else now
-        if not math.isfinite(timestamp):
+        if parse_timestamp(timestamp) is None:
             return
         point: dict[str, Any] = {"timestamp": timestamp, "used_percent": clamp(float(snapshot.used_percent), 0, 100)}
         if snapshot.resets_at is not None and math.isfinite(snapshot.resets_at):
@@ -603,17 +617,24 @@ class UsageHistory:
             if latest["timestamp"] == timestamp:
                 if latest == point:
                     return
-                candidate_points = [*self.points[:-1], point]
-            else:
-                candidate_points = [*self.points, point]
+        # Only the recovery window and its preceding sample can change when an
+        # ordered reading arrives. Never revalidate/sort the entire 30-day store.
+        tail_start = max(0, bisect_left(
+            self.points, timestamp - TRANSIENT_DROP_RECOVERY_MINUTES * 60,
+            key=lambda item: item["timestamp"],
+        ) - 1)
+        tail = self.points[tail_start:]
+        if tail and tail[-1]["timestamp"] == timestamp:
+            tail[-1] = point
         else:
-            candidate_points = [point]
-
-        updated_points = self._sanitize(candidate_points)
-        if updated_points == self.points:
+            tail.append(point)
+        updated_tail = self._sanitize(tail)
+        if updated_tail == self.points[tail_start:]:
             return
+        self.points[tail_start:] = updated_tail
         cutoff = now - HISTORY_RETENTION_DAYS * 24 * 60 * 60
-        self.points = [item for item in updated_points if item["timestamp"] >= cutoff][-HISTORY_MAX_POINTS:]
+        expired = bisect_left(self.points, cutoff, key=lambda item: item["timestamp"])
+        del self.points[:max(expired, len(self.points) - HISTORY_MAX_POINTS)]
         self._daily_cache_key = None
         self._daily_cache = []
         self.save(force=started_new_bucket)
@@ -623,15 +644,15 @@ class UsageHistory:
         if not force and now - self._last_saved_at < 30:
             return
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps(self.points), encoding="utf-8")
+            write_json_atomic(self.path, self.points)
             self._last_saved_at = now
         except OSError:
             pass
 
     def since(self, hours: float) -> list[dict[str, Any]]:
         cutoff = time.time() - hours * 60 * 60
-        return [item for item in self.points if item["timestamp"] >= cutoff]
+        start = bisect_left(self.points, cutoff, key=lambda item: item["timestamp"])
+        return self.points[start:]
 
     def hourly(self, hours: float) -> list[dict[str, Any]]:
         """Collapse samples to the latest reading in each local hour bucket."""
@@ -646,16 +667,14 @@ class UsageHistory:
     def chart_points(self, hours: float) -> list[dict[str, Any]]:
         """Return the minute-level series used by every statistics range."""
 
-        return self._sanitize(self.since(hours))
+        return self.since(hours)
 
     def points_between(self, start_time: float, end_time: float) -> list[dict[str, Any]]:
         """Return retained minute-level samples inside an explicit historical viewport."""
 
-        return self._sanitize(
-            item
-            for item in self.points
-            if start_time <= item["timestamp"] <= end_time
-        )
+        start = bisect_left(self.points, start_time, key=lambda item: item["timestamp"])
+        end = bisect_right(self.points, end_time, key=lambda item: item["timestamp"])
+        return self.points[start:end]
 
     def daily_statistics(self, days: int = HISTORY_RETENTION_DAYS) -> list[dict[str, Any]]:
         """Aggregate retained samples into stock-chart-style local calendar days."""
@@ -680,7 +699,7 @@ class UsageHistory:
         today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
         range_start = today_start - timedelta(days=days - 1)
         range_start_epoch = range_start.timestamp()
-        all_points = self._sanitize(self.points)
+        all_points = self.points
         points = [point for point in all_points if point["timestamp"] >= range_start_epoch]
         if not points:
             self._daily_cache_key = cache_key
@@ -894,7 +913,9 @@ class UsageHistory:
     ) -> list[dict[str, Any]]:
         """Return recent trend rates using a reset-aware regression plus EMA."""
 
-        points = self._sanitize(points if points is not None else self.chart_points(hours))
+        points = self.chart_points(hours) if points is None else (
+            points if points is self.points else self._sanitize(points)
+        )
         points = [point for point in points if number(point.get(value_field)) is not None]
         series: list[dict[str, Any]] = []
         smoothed: Optional[float] = None
@@ -998,7 +1019,9 @@ class UsageHistory:
     ) -> list[dict[str, Any]]:
         """Return an aligned, lightly smoothed current-task token rate."""
 
-        points = self._sanitize(points if points is not None else self.chart_points(hours))
+        points = self.chart_points(hours) if points is None else (
+            points if points is self.points else self._sanitize(points)
+        )
         series: list[dict[str, Any]] = []
         previous: Optional[dict[str, Any]] = None
         smoothed: Optional[float] = None
@@ -1046,7 +1069,9 @@ class UsageHistory:
     ) -> Optional[float]:
         """Return observed current-task tokens per allowance percentage point."""
 
-        points = self._sanitize(points if points is not None else self.chart_points(hours))
+        points = self.chart_points(hours) if points is None else (
+            points if points is self.points else self._sanitize(points)
+        )
         token_points = [point for point in points if number(point.get("total_tokens")) is not None and point.get("session_id")]
         if len(token_points) < 2:
             return None
@@ -1097,6 +1122,7 @@ class UsageSnapshot:
     model: Optional[str] = None
     reasoning_effort: Optional[str] = None
     context_timestamp: Optional[float] = None
+    token_timestamp: Optional[float] = None
     error: Optional[str] = None
     allowance_source: str = "local"
 
@@ -1106,7 +1132,10 @@ class UsageSnapshot:
 
     @property
     def is_stale(self) -> bool:
-        return bool(self.timestamp and time.time() - self.timestamp > ACTIVE_SIGNAL_MAX_AGE_SECONDS)
+        return self.timestamp is not None and (
+            parse_timestamp(self.timestamp) is None
+            or time.time() - self.timestamp > ACTIVE_SIGNAL_MAX_AGE_SECONDS
+        )
 
 
 def chatgpt_codex_home() -> Path:
@@ -1169,6 +1198,52 @@ class CodexTelemetryReader:
         self._watch_day_path: Optional[Path] = None
         self._last_discovery_at = float('-inf')
         self._full_context_scanned_paths: set[str] = set()
+        self._file_identities: dict[str, tuple[int, int]] = {}
+        self._read_offsets: dict[str, int] = {}
+        self._read_anchors: dict[str, tuple[int, bytes]] = {}
+
+    def _changed_lines(self, path: Path, size: int, append: bool) -> tuple[list[str], bool]:
+        """Read appended bytes, retry partial lines, and detect truncation/rewrites.
+
+        Only offsets and a short boundary fingerprint are retained, never log
+        contents. Bootstrap and catch-up reads are capped at four MiB.
+        """
+        key = str(path)
+        offset = self._read_offsets.get(key) if append else None
+        anchor = self._read_anchors.get(key) if append else None
+        with path.open("rb") as handle:
+            if anchor is not None:
+                old_end, previous_digest = anchor
+                handle.seek(max(0, old_end - 64))
+                if hashlib.sha256(handle.read(min(64, old_end))).digest() != previous_digest:
+                    offset = None
+                    append = False
+            limit = 4 * 1024 * 1024
+            if offset is None or size - offset > limit:
+                scan_bytes = min(size, 384 * 1024)
+                while True:
+                    start = max(0, size - scan_bytes)
+                    handle.seek(start)
+                    data = handle.read(size - start)
+                    if start:
+                        boundary = data.find(b"\n")
+                        data = data[boundary + 1:] if boundary >= 0 else b""
+                    if ((b'"rate_limits"' in data and b'"model"' in data
+                         and (b'"reasoning_effort"' in data or b'"effort"' in data))
+                            or scan_bytes >= size or scan_bytes >= limit):
+                        break
+                    scan_bytes = min(size, limit, scan_bytes * 2)
+            else:
+                handle.seek(offset)
+                data = handle.read(size - offset)
+            # Re-read an unterminated final record next time, including its UTF-8
+            # bytes; a complete JSON record without a newline still works now.
+            last_newline = data.rfind(b"\n")
+            pending = len(data) - last_newline - 1
+            self._read_offsets[key] = size - pending
+            handle.seek(max(0, size - 64))
+            self._read_anchors[key] = (size, hashlib.sha256(handle.read(min(64, size))).digest())
+        return data.decode("utf-8", errors="replace").splitlines(), append
 
     @staticmethod
     def _tail_lines(path: Path, max_bytes: int = 4 * 1024 * 1024) -> list[str]:
@@ -1295,6 +1370,8 @@ class CodexTelemetryReader:
                     if model is None and effort is None:
                         continue
                     timestamp = parse_timestamp(event.get("timestamp")) or 0.0
+                    if timestamp < latest_timestamp:
+                        continue
                     if model is not None:
                         latest_model = model
                     if effort is not None:
@@ -1342,7 +1419,7 @@ class CodexTelemetryReader:
     def _candidate_files(self) -> list[tuple[Path, os.stat_result]]:
         candidates: list[tuple[int, str, Path, os.stat_result]] = []
         now = time.monotonic()
-        full_scan = now - self._last_discovery_at >= SESSION_DISCOVERY_SECONDS or not self._file_cache
+        full_scan = now - self._last_discovery_at >= SESSION_DISCOVERY_SECONDS
         try:
             if full_scan:
                 paths = self.sessions_dir.rglob("*.jsonl")
@@ -1411,18 +1488,23 @@ class CodexTelemetryReader:
         file_mtime: float,
         fallback_snapshot: Optional[UsageSnapshot] = None,
         scan_full_context: bool = False,
+        lines: Optional[list[str]] = None,
     ) -> Optional[UsageSnapshot]:
         """Read allowance/token records plus model and effort metadata, never message text."""
 
-        latest: Optional[UsageSnapshot] = None
-        latest_token_values: dict[str, Optional[float]] = {}
+        latest = fallback_snapshot
+        token_fields = ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens",
+                        "total_tokens", "last_tokens", "context_window")
+        latest_token_values = {field: getattr(fallback_snapshot, field) for field in token_fields} if fallback_snapshot else {}
+        latest_token_timestamp = fallback_snapshot.token_timestamp if fallback_snapshot else None
         latest_model = fallback_snapshot.model if fallback_snapshot is not None else None
         latest_effort = fallback_snapshot.reasoning_effort if fallback_snapshot is not None else None
         latest_context_timestamp = (fallback_snapshot.context_timestamp or 0.0) if fallback_snapshot is not None else 0.0
-        for line in self._tail_lines(path):
+        for line in self._tail_lines(path) if lines is None else lines:
             contains_limits = '"rate_limits"' in line
             contains_context = any(key in line for key in ('"model"', '"reasoning_effort"', '"effort"'))
-            if not contains_limits and not contains_context:
+            contains_tokens = '"total_token_usage"' in line
+            if not contains_limits and not contains_context and not contains_tokens:
                 continue
             try:
                 event = json.loads(line)
@@ -1430,8 +1512,12 @@ class CodexTelemetryReader:
                 continue
             if not isinstance(event, dict):
                 continue
-            timestamp = parse_timestamp(event.get("timestamp")) or file_mtime
-            if contains_context:
+            timestamp = parse_timestamp(event.get("timestamp"))
+            if timestamp is None:
+                timestamp = parse_timestamp(file_mtime)
+            if timestamp is None:
+                continue
+            if contains_context and timestamp >= latest_context_timestamp:
                 model, effort = self._event_context(event)
                 if model is not None:
                     latest_model = model
@@ -1439,15 +1525,9 @@ class CodexTelemetryReader:
                 if effort is not None:
                     latest_effort = effort
                     latest_context_timestamp = max(latest_context_timestamp, timestamp)
-            if not contains_limits:
-                continue
             limits = self._rate_limits(event)
-            if not limits:
-                continue
-            five_hour, weekly = self._allowance_windows(limits)
-            five_hour_used = number(five_hour.get("used_percent")) if five_hour else None
-            weekly_used = number(weekly.get("used_percent")) if weekly else None
-            if five_hour_used is None and weekly_used is None:
+            # Ignore token totals explicitly attached to a different quota bucket.
+            if contains_limits and not limits:
                 continue
             payload = event.get("payload")
             info = payload.get("info") if isinstance(payload, dict) else None
@@ -1466,17 +1546,26 @@ class CodexTelemetryReader:
                 "last_tokens": number(last_usage.get("total_tokens")),
                 "context_window": number(info.get("model_context_window")) if isinstance(info, dict) else None,
             }
-            if token_values["total_tokens"] is not None:
-                latest_token_values = token_values
-            elif latest_token_values:
-                token_values = latest_token_values
+            if (token_values["total_tokens"] is not None and token_values["total_tokens"] >= 0
+                    and (latest_token_timestamp is None or timestamp >= latest_token_timestamp)):
+                latest_token_values = {key: value if value is not None and value >= 0 else None
+                                       for key, value in token_values.items()}
+                latest_token_timestamp = timestamp
+            if not limits:
+                continue
+            five_hour, weekly = self._allowance_windows(limits)
+            five_hour_used = number(five_hour.get("used_percent")) if five_hour else None
+            weekly_used = number(weekly.get("used_percent")) if weekly else None
+            if five_hour_used is None and weekly_used is None:
+                continue
+            token_values = latest_token_values
             snapshot = UsageSnapshot(
                 used_percent=clamp(weekly_used, 0, 100) if weekly_used is not None else None,
                 window_minutes=int(number(weekly.get("window_minutes")) or 0) or None if weekly else None,
-                resets_at=number(weekly.get("resets_at")) if weekly else None,
+                resets_at=parse_timestamp(weekly.get("resets_at")) if weekly else None,
                 five_hour_used_percent=clamp(five_hour_used, 0, 100) if five_hour_used is not None else None,
                 five_hour_window_minutes=int(number(five_hour.get("window_minutes")) or 0) or None if five_hour else None,
-                five_hour_resets_at=number(five_hour.get("resets_at")) if five_hour else None,
+                five_hour_resets_at=parse_timestamp(five_hour.get("resets_at")) if five_hour else None,
                 plan_type=str(limits.get("plan_type") or "").strip() or None,
                 timestamp=timestamp,
                 source_path=str(path),
@@ -1491,18 +1580,18 @@ class CodexTelemetryReader:
                 reasoning_effort=latest_effort,
                 context_timestamp=latest_context_timestamp or None,
             )
-            if latest is None or timestamp > (latest.timestamp or 0):
+            if latest is None or latest.timestamp is None or timestamp >= latest.timestamp:
                 latest = snapshot
         if scan_full_context:
             model, effort, context_timestamp = self._full_file_context(path)
-            if model is not None:
+            if model is not None and context_timestamp >= latest_context_timestamp:
                 latest_model = model
-            if effort is not None:
+            if effort is not None and context_timestamp >= latest_context_timestamp:
                 latest_effort = effort
             latest_context_timestamp = max(latest_context_timestamp, context_timestamp)
         if latest is None:
             latest = fallback_snapshot
-        if latest is None and (latest_model is not None or latest_effort is not None):
+        if latest is None and (latest_model is not None or latest_effort is not None or latest_token_values):
             latest = UsageSnapshot(source_path=str(path))
         if latest is not None and (latest_model is not None or latest_effort is not None):
             latest = replace(
@@ -1511,10 +1600,14 @@ class CodexTelemetryReader:
                 reasoning_effort=latest_effort or latest.reasoning_effort,
                 context_timestamp=latest_context_timestamp or latest.context_timestamp,
             )
+        if latest is not None and latest_token_values:
+            latest = replace(latest, **latest_token_values, token_timestamp=latest_token_timestamp)
         return latest
 
     def read(self) -> UsageSnapshot:
         if not self.sessions_dir.exists():
+            self._capture_watch_state({})
+            self._last_discovery_at = time.monotonic()
             return UsageSnapshot(error="Codex session telemetry is not available yet")
 
         latest: Optional[tuple[float, UsageSnapshot]] = None
@@ -1526,18 +1619,23 @@ class CodexTelemetryReader:
             cache_key = str(path)
             signature = (metadata.st_mtime_ns, metadata.st_size)
             cached = self._file_cache.get(cache_key)
-            if cached is not None and cached[:2] == signature:
+            identity = (metadata.st_dev, metadata.st_ino)
+            same_file = self._file_identities.get(cache_key) == identity
+            if cached is not None and same_file and cached[:2] == signature:
                 snapshot = cached[2]
             else:
-                fallback = cached[2] if cached is not None and metadata.st_size > cached[1] else None
-                snapshot = self._read_file(path, metadata.st_mtime, fallback)
-                if (
-                    cached is not None
-                    and metadata.st_size > cached[1]
-                    and cached[2] is not None
-                    and (snapshot is None or (cached[2].timestamp or 0) > (snapshot.timestamp or 0))
-                ):
-                    snapshot = cached[2]
+                append = same_file and cached is not None and metadata.st_size > cached[1]
+                try:
+                    lines, append = self._changed_lines(path, metadata.st_size, append)
+                except OSError:
+                    if cached is not None:
+                        next_cache[cache_key] = cached
+                    continue
+                fallback = cached[2] if append and cached is not None else None
+                if not append:
+                    self._full_context_scanned_paths.discard(cache_key)
+                snapshot = self._read_file(path, metadata.st_mtime, fallback, lines=lines)
+            self._file_identities[cache_key] = identity
             next_cache[cache_key] = (signature[0], signature[1], snapshot)
             if snapshot is not None and snapshot.timestamp is not None:
                 if latest is None or snapshot.timestamp > latest[0]:
@@ -1546,6 +1644,10 @@ class CodexTelemetryReader:
                 if latest_context is None or snapshot.context_timestamp > latest_context[0]:
                     latest_context = (snapshot.context_timestamp, snapshot)
         self._file_cache = next_cache
+        self._full_context_scanned_paths.intersection_update(next_cache)
+        for cache in (self._file_identities, self._read_offsets, self._read_anchors):
+            for key in cache.keys() - next_cache.keys():
+                del cache[key]
         self._capture_watch_state(next_cache)
 
         if latest:
@@ -1627,7 +1729,7 @@ class CombinedUsageReader:
                 normalized[name] = {
                     "used_percent": number(window.get("usedPercent")),
                     "window_minutes": number(window.get("windowDurationMins")),
-                    "resets_at": number(window.get("resetsAt")),
+                    "resets_at": parse_timestamp(window.get("resetsAt")),
                 }
         five_hour, weekly = CodexTelemetryReader._allowance_windows(normalized)
         fields: dict[str, Any] = {}
@@ -1656,7 +1758,7 @@ class CombinedUsageReader:
             activity = {name: getattr(local, name) for name in (
                 "source_path", "input_tokens", "cached_input_tokens", "output_tokens",
                 "reasoning_tokens", "total_tokens", "last_tokens", "context_window",
-                "model", "reasoning_effort", "context_timestamp",
+                "model", "reasoning_effort", "context_timestamp", "token_timestamp",
             )}
             account = replace(account, **activity)
         return replace(account, error=error)
