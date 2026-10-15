@@ -1,5 +1,36 @@
 # Current progress
 
+Objective: Fix reproduced bugs and optimize Codex Usage Counter performance (October 14, 2026).
+
+Progress: [##########] 100% — verified fixes synchronized in PR #42; Windows review build and delivery artifacts complete.
+
+- [x] Reconcile clean main fef6a1b, project notes, and GitHub issues.
+- [x] Capture baseline performance and reproduce bugs with isolated synthetic fixtures.
+- [x] Implement bounded history updates, incremental telemetry reads, metadata ordering, timestamp validation, atomic persistence, and resilient process cleanup.
+- [x] Add 13 regressions and verify all 72 application tests plus seven Tcl/Tk packaging tests; no skips.
+- [x] Benchmark final implementation and save docs/PERFORMANCE.md.
+- [x] Synchronize the fix branch and open/attach GitHub PR #42.
+- [x] Build and inspect the Windows executable; deliver source, evidence, and continuity files.
+
+Current implementation: fix/usage-correctness-performance. Existing release metadata remains 1.2.1.
+Blockers: none. Packaging succeeded with isolated PyInstaller 6.22.3 and the project Tcl/Tk staging helper.
+Verification: python -m unittest discover -v; python -m unittest discover -s scripts -p test_*.py -v; python scripts/benchmark_usage.py; git diff --check.
+Performance: 43,200 history points, median five runs; record 877.343 -> 0.274 ms (JSON writes excluded); appended telemetry 560.018 -> 1.141 ms. Full evidence is in docs/PERFORMANCE.md.
+
+GitHub: https://github.com/remriel/codex-usage-counter/pull/42 (open, ready for review, mergeable with clean merge state). Implementation commit: e7ef05334a57cffd5206a732227a594c0bbc1c8e.
+
+Build: CodexUsageCounter.exe, 15253464 bytes, SHA-256 51BCDCE071B9598AE637C4504D24F9814F9EB59B2A04113AB384B7065683AFAE. Packaged hot-path bytecode matches the verified source, and Tcl/Tk data is present. This is a review build using the existing 1.2.1 version metadata; the installed app and published release are unchanged.
+
+Delivery files: CodexUsageCounter.exe, CodexUsageCounter-performance-fix-source.zip, PERFORMANCE_REPORT.md, verification/test logs, PROGRESS.md, PROJECT_STATE.md, and SHA256SUMS.txt in task outputs.
+
+Next steps:
+1. No implementation or delivery work remains for this request.
+2. Review/merge PR #42; a versioned public release and installation are separate follow-up work.
+
+# Previous work (historical)
+
+# Current progress
+
 Objective: Publish Codex Usage Counter v1.2.1 with the verified 175% Windows display scaling fix.
 
 Progress: [##########] 100% - v1.2.1 published as latest, assets verified, and matching executable installed.

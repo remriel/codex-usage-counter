@@ -67,8 +67,25 @@
 - APP_VERSION=1.2.1 confirmed in the frozen executable's embedded Python archive. All 59 application tests and 7 packaging tests pass. Build reuses the approved visual/audio assets and stages Tcl/Tk libraries.
 - Release files and final continuity documents are in task outputs. Source tag contains the pre-publication build record; publication completion is recorded afterward on main.
 
-## RESUME HERE
+## Previous release resume point (historical)
 
 v1.2.1 is complete, published as latest, and installed. PR #41 is merged. Release tag and executable/source digests are recorded above; installed executable matches the published asset and settings are preserved. No release work remains. Resume only for a new request or a reported regression.
 
 Per-cloud-task token totals and model attribution remain unavailable through account allowance polling.
+
+## October 14 correctness and performance audit
+
+- Current branch: fix/usage-correctness-performance, based on main fef6a1b.
+- History is validated/coalesced on load. Ordered records reprocess only the five-minute transient-drop recovery window plus one predecessor; chronological queries use bisect. Preserve this invariant before changing record or query methods.
+- Telemetry caches file identity, byte offsets, and a SHA-256 boundary fingerprint. Appends read only changed bytes; an unterminated last record is retried from its beginning. Bootstrap/catch-up reads remain capped at four MiB. Truncations, replacement files, and changed boundaries invalidate inherited metadata. Cache entries are pruned with the 48 tracked files.
+- Token-only telemetry updates local token totals using an independent token_timestamp; allowance timestamps stay unchanged. Older token/context events cannot overwrite newer metadata. Explicit non-Codex buckets remain isolated.
+- Settings and history now use same-directory temporary files and os.replace. A failed replacement leaves the old complete JSON intact. Saves remain synchronous on their existing schedule.
+- Empty directories respect the 30-second recursive scan interval. Epoch zero is a valid timestamp; invalid/unrepresentable history/reset dates are rejected.
+- Account cleanup catches failures from kill/wait and stream closure so retry/shutdown is not stranded by an exited process.
+- Regression verification: 72 application tests (including real Windows Tk) plus seven packaging tests pass, with no skips. Of 13 added regressions, ten failed and one errored before implementation; all pass now.
+- Synthetic benchmark and limitations are in docs/PERFORMANCE.md; reproduction: python scripts/benchmark_usage.py. History record improved from 877.343 ms to 0.274 ms; appended telemetry from 560.018 ms to 1.141 ms in the final verification run. History timing excludes periodic JSON persistence.
+- Packaging dependencies were absent from the base interpreter. PyInstaller 6.22.3 was installed into the task work/build-deps directory. The existing PowerShell build script did not discover that isolated target; a task-local wrapper imports it explicitly and uses scripts/prepare_tk_data.py prepare(). No dependency-installation changes are part of the application source.
+
+## RESUME HERE
+
+The October 14 bug/performance implementation is complete in open, ready-for-review PR #42: https://github.com/remriel/codex-usage-counter/pull/42. Implementation commit e7ef05334a57cffd5206a732227a594c0bbc1c8e; all 79 tests pass. The Windows review build is 15,253,464 bytes, SHA-256 51BCDCE071B9598AE637C4504D24F9814F9EB59B2A04113AB384B7065683AFAE. Packaged hot-path bytecode matches source and Tcl/Tk data is included. The task outputs contain executable, source ZIP, benchmark evidence, checksums, and final notes. The installed app and published release remain unchanged. Read docs/PROGRESS.md for delivery details. Preserve profile isolation, the documented account polling protocol, existing approved visual/audio assets, and the local-only meaning of token/model metadata. No release version/tag changes are part of this maintenance branch.
