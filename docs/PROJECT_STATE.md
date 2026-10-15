@@ -116,6 +116,16 @@ Verification: 72 application tests and seven packaging tests pass, no skips. Fro
 The executable was rebuilt for 1.2.2; the previous 1.2.1-metadata review build was not published. Local installation was not changed by the publication request.
 Release source contains the pre-publication build record. Final publication evidence is synchronized in a later documentation-only commit on main.
 
+## October 15 local installation update
+
+- User explicitly requested updating the PC after publication.
+- Updated the existing installation to the published v1.2.2 executable; SHA-256 C20DD898174AB0E50A128CC08D3D4292BA777CF7C555C00523B3C6B00B1C3BE7 matches the release.
+- Backed up the previous v1.2.1 executable and persisted settings/history before replacement. Backup is retained in task outputs under v1.2.2/pc-update-backup-20261015-090333/.
+- Stopped only the installed counter's processes and its owned app-server child, replaced the executable, and restarted from the existing installation path.
+- Both packaged parent/child processes are alive, the counter window responds, and its account app-server child is alive.
+- Settings hash is unchanged, both existing history files are present, and all three persisted data files were byte-identical through replacement before restart.
+- The error log has no new entries after restart. PC_UPDATE.json in task outputs contains the verification and rollback details; private backup/settings/history files are not committed to GitHub.
+
 ## RESUME HERE
 
-v1.2.2 is complete and published as latest. PR #42 is merged. All release asset digests match the verified local files; the source archive comes from immutable tag 7b0fba2. No release work remains, and local installation was not changed. Use docs/PROGRESS.md for the full completion record. Preserve the bounded-history and incremental-telemetry invariants described above.
+v1.2.2 is published as latest and now installed on the PC. Installed hash matches the published executable. The app and owned account reader are running, the window is responsive, settings/history are preserved, and the error log is unchanged. Previous executable and data backup are retained locally in task outputs. No release or installation work remains. Use docs/PROGRESS.md and the local PC_UPDATE.json for the full completion record.

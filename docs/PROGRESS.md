@@ -1,3 +1,26 @@
+# PC update complete
+
+Objective: Update the installed counter to the published v1.2.2 release.
+
+Progress: [##########] 100% — installed, restarted, and verified.
+
+## October 15 local installation update
+
+- User explicitly requested updating the PC after publication.
+- Updated the existing installation to the published v1.2.2 executable; SHA-256 C20DD898174AB0E50A128CC08D3D4292BA777CF7C555C00523B3C6B00B1C3BE7 matches the release.
+- Backed up the previous v1.2.1 executable and persisted settings/history before replacement. Backup is retained in task outputs under v1.2.2/pc-update-backup-20261015-090333/.
+- Stopped only the installed counter's processes and its owned app-server child, replaced the executable, and restarted from the existing installation path.
+- Both packaged parent/child processes are alive, the counter window responds, and its account app-server child is alive.
+- Settings hash is unchanged, both existing history files are present, and all three persisted data files were byte-identical through replacement before restart.
+- The error log has no new entries after restart. PC_UPDATE.json in task outputs contains the verification and rollback details; private backup/settings/history files are not committed to GitHub.
+
+Blockers: none.
+
+Next steps:
+1. No update work remains. Resume only for a new request or regression.
+
+# Release execution record (historical)
+
 # Release progress
 
 Objective: Publish Codex Usage Counter v1.2.2 (October 15, 2026).
