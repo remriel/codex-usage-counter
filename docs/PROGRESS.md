@@ -2,25 +2,37 @@
 
 Objective: Publish Codex Usage Counter v1.2.2 (October 15, 2026).
 
-Progress: [########--] 80% — all 79 tests pass; v1.2.2 executable built and verified; publication next.
+Progress: [##########] 100% — release published as latest; assets and source tag verified.
 
-- [x] Reconcile clean Git state, PR #42, and latest release v1.2.1.
-- [x] Merge PR #42 into main (a8f8e08).
-- [x] Set APP_VERSION to 1.2.2.
-- [x] Run all application and packaging tests.
-- [x] Build the executable and verify embedded version, hot-path code, and Tcl/Tk assets.
-- [ ] Tag the exact source, generate source ZIP, and publish GitHub release assets.
-- [ ] Verify remote asset hashes and synchronize final continuity documents.
+- [x] Reconcile repository, PR #42, and release state.
+- [x] Merge PR #42 into main and set APP_VERSION=1.2.2.
+- [x] Pass all 72 application and seven packaging tests.
+- [x] Rebuild the Windows executable and verify its embedded version/code and Tcl/Tk data.
+- [x] Tag exact source, generate source ZIP, upload executable/source/checksums, and publish as latest.
+- [x] Verify published asset sizes/digests and save final continuity documents and evidence.
 
-Current implementation: main includes the verified correctness/performance fixes. The frozen executable contains APP_VERSION=1.2.2, the hot-path bytecode matches source, and Tcl/Tk data is present. Build: 15253521 bytes, SHA-256 C20DD898174AB0E50A128CC08D3D4292BA777CF7C555C00523B3C6B00B1C3BE7.
-Blockers: none. Use task-local work/build_review.py with isolated PyInstaller 6.22.3.
-The release request authorizes publication; no local installation change is requested.
+Blockers: none.
+
+Published release: https://github.com/remriel/codex-usage-counter/releases/tag/v1.2.2
+Latest public, non-prerelease release confirmed through GitHub's releases/latest endpoint.
+PR #42 is merged at a8f8e08e0f8e4a0b03188adae3e967a4e5c36214.
+Tag v1.2.2 points to 7b0fba2d91a8c4cb666526808d45f29100d067f1.
+
+Executable: CodexUsageCounter.exe, 15,253,521 bytes.
+SHA-256: C20DD898174AB0E50A128CC08D3D4292BA777CF7C555C00523B3C6B00B1C3BE7.
+Source: CodexUsageCounter-source-v1.2.2.zip, 2,089,217 bytes, generated from the immutable tag.
+SHA-256: 3EB711A80945B5D570828CC6E76EF238A7A1D22107A37750440E5D441D38AA0D.
+Published SHA256SUMS-v1.2.2.txt covers both assets. All three GitHub asset digests match local delivery files.
+
+Verification: 72 application tests and seven packaging tests pass, no skips. Frozen APP_VERSION=1.2.2, hot-path bytecode/source agreement, and Tcl/Tk assets are verified. The first native geometry test attempt hit transient Windows event settling; the full rerun passed. Build preparation cleared read-only flags only in validated generated paths, rejecting reparse points.
+
+The executable was rebuilt for 1.2.2; the previous 1.2.1-metadata review build was not published. Local installation was not changed by the publication request.
+Release source contains the pre-publication build record. Final publication evidence is synchronized in a later documentation-only commit on main.
+
+Delivery: outputs/v1.2.2 contains release files, test/build logs, build and publication verification, and final PROGRESS.md/PROJECT_STATE.md. Root output continuity files also reflect this release.
 
 Next steps:
-1. Test and build version 1.2.2.
-2. Verify the versioned executable and tag its source commit.
-3. Publish executable/source/checksums and verify the latest public release.
-4. Update and deliver final PROJECT_STATE.md and PROGRESS.md.
+1. No release work remains. Resume only for a new request or regression.
 
 # Previous execution state (historical)
 

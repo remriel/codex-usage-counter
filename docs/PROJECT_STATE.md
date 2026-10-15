@@ -98,6 +98,24 @@ The October 14 bug/performance implementation is complete in open, ready-for-rev
 - Reuse the approved assets and isolated PyInstaller 6.22.3 with the task-local wrapper. Verify packaged version and Tcl/Tk data before publication.
 - Publication does not require changing the user's running installation.
 
+## Published v1.2.2 — October 15, 2026
+
+Published release: https://github.com/remriel/codex-usage-counter/releases/tag/v1.2.2
+Latest public, non-prerelease release confirmed through GitHub's releases/latest endpoint.
+PR #42 is merged at a8f8e08e0f8e4a0b03188adae3e967a4e5c36214.
+Tag v1.2.2 points to 7b0fba2d91a8c4cb666526808d45f29100d067f1.
+
+Executable: CodexUsageCounter.exe, 15,253,521 bytes.
+SHA-256: C20DD898174AB0E50A128CC08D3D4292BA777CF7C555C00523B3C6B00B1C3BE7.
+Source: CodexUsageCounter-source-v1.2.2.zip, 2,089,217 bytes, generated from the immutable tag.
+SHA-256: 3EB711A80945B5D570828CC6E76EF238A7A1D22107A37750440E5D441D38AA0D.
+Published SHA256SUMS-v1.2.2.txt covers both assets. All three GitHub asset digests match local delivery files.
+
+Verification: 72 application tests and seven packaging tests pass, no skips. Frozen APP_VERSION=1.2.2, hot-path bytecode/source agreement, and Tcl/Tk assets are verified. The first native geometry test attempt hit transient Windows event settling; the full rerun passed. Build preparation cleared read-only flags only in validated generated paths, rejecting reparse points.
+
+The executable was rebuilt for 1.2.2; the previous 1.2.1-metadata review build was not published. Local installation was not changed by the publication request.
+Release source contains the pre-publication build record. Final publication evidence is synchronized in a later documentation-only commit on main.
+
 ## RESUME HERE
 
-v1.2.2 is built and verified; publication is next. All 72 application and seven packaging tests pass. Executable: 15253521 bytes, SHA-256 C20DD898174AB0E50A128CC08D3D4292BA777CF7C555C00523B3C6B00B1C3BE7. Packaged APP_VERSION=1.2.2, hot-path bytecode, and Tcl/Tk assets are confirmed. The first release test attempt hit transient Windows geometry settling; the complete rerun passed. Generated Tcl/Tk files and directories needed their read-only flags cleared after resolved-path and reparse-point checks. The release executable was rebuilt from main after the version change. Follow docs/PROGRESS.md, verify repository and GitHub state before retrying any publication, and avoid duplicate tags/releases.
+v1.2.2 is complete and published as latest. PR #42 is merged. All release asset digests match the verified local files; the source archive comes from immutable tag 7b0fba2. No release work remains, and local installation was not changed. Use docs/PROGRESS.md for the full completion record. Preserve the bounded-history and incremental-telemetry invariants described above.
