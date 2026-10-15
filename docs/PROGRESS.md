@@ -1,3 +1,29 @@
+# Release progress
+
+Objective: Publish Codex Usage Counter v1.2.2 (October 15, 2026).
+
+Progress: [####------] 40% — PR #42 merged; release version set; verification and build next.
+
+- [x] Reconcile clean Git state, PR #42, and latest release v1.2.1.
+- [x] Merge PR #42 into main (a8f8e08).
+- [x] Set APP_VERSION to 1.2.2.
+- [ ] Run all application and packaging tests.
+- [ ] Build the executable and verify embedded version, hot-path code, and Tcl/Tk assets.
+- [ ] Tag the exact source, generate source ZIP, and publish GitHub release assets.
+- [ ] Verify remote asset hashes and synchronize final continuity documents.
+
+Current implementation: main includes the verified correctness/performance fixes.
+Blockers: none. Use task-local work/build_review.py with isolated PyInstaller 6.22.3.
+The release request authorizes publication; no local installation change is requested.
+
+Next steps:
+1. Test and build version 1.2.2.
+2. Verify the versioned executable and tag its source commit.
+3. Publish executable/source/checksums and verify the latest public release.
+4. Update and deliver final PROJECT_STATE.md and PROGRESS.md.
+
+# Previous execution state (historical)
+
 # Current progress
 
 Objective: Fix reproduced bugs and optimize Codex Usage Counter performance (October 14, 2026).
