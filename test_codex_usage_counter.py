@@ -564,8 +564,29 @@ class AppRegressionTests(unittest.TestCase):
         counter.last_alert_buckets = {}
         counter.last_alert_windows = {}
         counter.tray_popup = Mock()
+        counter.tray = Mock()
         counter._play_sound_alert = Mock()
         return counter
+
+    def test_five_hour_reset_shows_native_tray_notification(self):
+        counter = self.make_app()
+        counter.settings.display_mode = 'remaining'
+        with patch.object(app.time, 'time', return_value=10000):
+            counter._maybe_show_milestone(app.UsageSnapshot(timestamp=9990,
+                five_hour_used_percent=80, five_hour_resets_at=9995))
+            counter._maybe_show_milestone(app.UsageSnapshot(timestamp=10000,
+                five_hour_used_percent=3, five_hour_resets_at=27995))
+        counter.tray.show_notification.assert_called_once_with(
+            'Codex Usage Counter', '5-hour limit reset · 97% remaining')
+
+    def test_weekly_reset_does_not_show_five_hour_notification(self):
+        counter = self.make_app()
+        with patch.object(app.time, 'time', return_value=10000):
+            counter._maybe_show_milestone(app.UsageSnapshot(timestamp=9990,
+                used_percent=80, resets_at=9995))
+            counter._maybe_show_milestone(app.UsageSnapshot(timestamp=10000,
+                used_percent=3, resets_at=614795))
+        counter.tray.show_notification.assert_not_called()
 
     def test_resets_combined_deduplicated_and_respect_display(self):
         counter = self.make_app()

@@ -2027,6 +2027,8 @@ class TrayIcon:
                 self._modify_icon(str(value))
             elif action == "icon":
                 self._set_icon(Path(str(value)))
+            elif action == "notification":
+                self._show_notification(*value)
             elif action == "quit" and self._hwnd:
                 _user32.PostMessageW(self._hwnd, 0x0010, 0, 0)
 
@@ -2054,6 +2056,19 @@ class TrayIcon:
             data = self._icon_data(self._tooltip)
             _shell32.Shell_NotifyIconW(1, ctypes.byref(data))  # NIM_MODIFY
 
+    def _show_notification(self, title: str, message: str) -> None:
+        if not self._hwnd:
+            return
+        data = _NOTIFYICONDATAW()
+        data.cbSize = ctypes.sizeof(_NOTIFYICONDATAW)
+        data.hWnd = self._hwnd
+        data.uID = 1
+        data.uFlags = 0x00000010  # NIF_INFO
+        data.szInfo = message[:255]
+        data.szInfoTitle = title[:63]
+        data.dwInfoFlags = 0x00000001  # NIIF_INFO
+        _shell32.Shell_NotifyIconW(1, ctypes.byref(data))  # NIM_MODIFY
+
     def _set_icon(self, icon_path: Path) -> None:
         if not self._hwnd:
             return
@@ -2078,6 +2093,12 @@ class TrayIcon:
     def update_icon(self, icon_path: Path) -> None:
         if self._thread and self._thread.is_alive():
             self._actions.put(("icon", str(icon_path)))
+            if self._hwnd:
+                _user32.PostMessageW(self._hwnd, self._callback_message, 0, 0)
+
+    def show_notification(self, title: str, message: str) -> None:
+        if self._thread and self._thread.is_alive():
+            self._actions.put(("notification", (title, message)))
             if self._hwnd:
                 _user32.PostMessageW(self._hwnd, self._callback_message, 0, 0)
 
@@ -2786,6 +2807,13 @@ class UsageApp:
             self.tray_popup.show("  ·  ".join(alerts))
             if self.settings.sound_alert:
                 self._play_sound_alert()
+        five_hour_reset = any(alert.startswith("5H reset · ") for alert in alerts)
+        if five_hour_reset:
+            self.tray.show_notification(
+                "Codex Usage Counter",
+                f"5-hour limit reset · {self._display_value(result.five_hour_used_percent):.0f}% "
+                f"{self._display_label()}",
+            )
 
     def _poll_tray(self) -> None:
         try:
