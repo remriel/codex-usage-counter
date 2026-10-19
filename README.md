@@ -18,7 +18,7 @@ A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, rese
 - Shows the active or selected model and reasoning effort as a large, simplified **Hourly** Statistics header label such as **SOL · HIGH**; aggregate Daily and Weekly views omit context because it can change within an interval.
 - Keeps Statistics focused on **Hourly** (the default; point anywhere and mouse-wheel zoom from one minute through all retained history), **Daily**, and **Weekly** views. Hourly zoom is anchored to the period beneath the cursor instead of always snapping back to the latest data, and right-button dragging pans left or right through retained history.
 - Displays the most constrained allowance directly in the notification-area tray icon, so the number is useful without hovering; the tooltip identifies both windows.
-- Shows a custom in-app tray milestone popup above the Windows notification area; it does not use Windows toast or balloon notifications.
+- Shows a custom in-app tray milestone popup for milestones and resets, plus a Windows notification-area alert when the 5-hour limit resets.
 - Polls local usage automatically every two seconds; every automatic read refreshes usage, rate, and ETA together, while **Refresh now** reads immediately outside that schedule.
 - Supports Used or Remaining display mode, always-on-top behavior, optional Start with Windows behavior, optional custom milestone chime, trigger percentage, and popup duration.
 - Keeps minute-level usage history in the zoomable **Hourly** view, plus stock-chart-style **Daily** and **Weekly** intervals with reset-aware 5-hour/weekly totals, pace, and token activity. The token pane keeps activity bars and overlays a clearly labeled tokens/min trend line; Daily and Weekly usage and pace bars include thin trend lines with circular points across adjacent recorded intervals.
@@ -28,7 +28,7 @@ A live Windows tray counter for Codex 5-hour and weekly usage, rates, ETAs, rese
 
 ## Quick start on Windows
 
-The app also shows a custom tray-area popup when fresh telemetry confirms a 5-hour or weekly reset while it is running. Reset alerts follow Used/Remaining, popup duration, and sound settings. They do not use Windows notifications. A reset is reported when Codex writes the new allowance window, not simply when a countdown reaches zero; startup establishes a quiet baseline.
+The app shows a custom tray-area popup when fresh telemetry confirms a 5-hour or weekly reset while it is running, and a Windows notification-area alert for 5-hour resets. Reset popups follow Used/Remaining, popup duration, and sound settings. A reset is reported when Codex writes the new allowance window, not simply when a countdown reaches zero; startup establishes a quiet baseline.
 
 1. Download `CodexUsageCounter.exe` from the [latest release](../../releases/latest).
 2. Run it. The app starts in the notification area and opens its counter window.
