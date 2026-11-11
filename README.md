@@ -114,3 +114,5 @@ Use `-Remove` to remove the current-user Startup shortcut.
 
 - [Presence](https://github.com/remriel/presence-windows): local-network device discovery and arrival/departure monitoring.
 - [Ovo Timer](https://github.com/remriel/ovo-timer-android): an interactive countdown timer for Windows and Android.
+
+If you find this project useful, you can [buy me a coffee](https://buymeacoffee.com/remriel).
